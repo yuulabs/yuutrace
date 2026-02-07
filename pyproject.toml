@@ -1,0 +1,14 @@
+[project]
+name = "yuutrace"
+version = "0.1.0"
+description = "LLM-oriented observability SDK built on OpenTelemetry with cost/usage tracking"
+readme = "README.md"
+authors = [
+    { name = "Tomorrowdawn", email = "tomorrowdawn@mail.ustc.edu.cn" }
+]
+requires-python = ">=3.14"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.9.13,<0.10.0"]
+build-backend = "uv_build"
