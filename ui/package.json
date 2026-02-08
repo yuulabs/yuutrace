@@ -1,5 +1,5 @@
 {
-  "name": "@yuutrace/ui",
+  "name": "@yuulabs/ytrace-ui",
   "version": "0.1.0",
   "description": "React components for LLM trace visualization",
   "type": "module",

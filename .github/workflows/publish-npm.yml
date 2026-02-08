@@ -1,19 +1,27 @@
 # Publish @yuutrace/ui to npm when a version tag is pushed,
 # but ONLY if files under ui/ have changed since the last tag.
 #
+# Uses OIDC Trusted Publishing — no NPM_TOKEN secret needed.
+# See: https://docs.npmjs.com/trusted-publishers
+#
+# Prerequisites:
+#   1. On npmjs.com, go to package Settings → Trusted Publisher
+#   2. Configure: org=yuulabs, repo=yuutrace,
+#      workflow=publish-npm.yml, environment=(leave empty)
+#
 # Usage:
 #   git tag v0.1.0
 #   git push origin v0.1.0
-#
-# Prerequisites:
-#   Set an NPM_TOKEN secret in repo settings.
-#   (npm token create --read-only=false)
 name: Publish to npm
 
 on:
   push:
     tags:
       - "v*"
+
+permissions:
+  id-token: write              # required for OIDC trusted publishing
+  contents: read
 
 jobs:
   check:
@@ -52,15 +60,12 @@ jobs:
     defaults:
       run:
         working-directory: ui
-    permissions:
-      contents: read
-      id-token: write          # npm provenance
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           registry-url: https://registry.npmjs.org
           cache: npm
           cache-dependency-path: ui/package-lock.json
@@ -74,6 +79,4 @@ jobs:
         run: npm run build:lib
 
       - name: Publish
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
