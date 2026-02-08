@@ -78,5 +78,22 @@ jobs:
       - name: Build library
         run: npm run build:lib
 
+      - name: Determine publish tag
+        id: tag
+        run: |
+          PKG_NAME=$(node -p "require('./package.json').name")
+          PKG_VER=$(node -p "require('./package.json').version")
+          # Get the current "latest" version from npm; default to 0.0.0 if unpublished
+          LATEST=$(npm view "$PKG_NAME" version 2>/dev/null || echo "0.0.0")
+          echo "Package: $PKG_NAME  Local: $PKG_VER  Registry latest: $LATEST"
+          # Compare using node semver: if local < latest, publish under "test" tag
+          if npx --yes semver "$PKG_VER" -r ">$LATEST" > /dev/null 2>&1; then
+            echo "Publishing as latest"
+            echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "Local version <= registry latest, publishing with --tag test"
+            echo "npm_tag=test" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish
-        run: npm publish --access public
+        run: npm publish --access public --tag ${{ steps.tag.outputs.npm_tag }}
