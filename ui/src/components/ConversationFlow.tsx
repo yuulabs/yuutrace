@@ -68,12 +68,43 @@ function GenericCard({ span, costs }: { span: Span; costs: CostEvent[] }) {
   const durationMs =
     (span.end_time_unix_nano - span.start_time_unix_nano) / 1_000_000;
 
+  // Extract system and user context from conversation span
+  const systemPersona = span.attributes["yuu.context.system.persona"] as string | undefined;
+  const systemTools = span.attributes["yuu.context.system.tools"] as string | undefined;
+  const userContent = span.attributes["yuu.context.user.content"] as string | undefined;
+
+  const hasContext = systemPersona || systemTools || userContent;
+
   return (
     <div style={styles.card}>
       <div style={styles.cardHeader}>
         <span style={styles.spanName}>{span.name}</span>
         <span style={styles.duration}>{durationMs.toFixed(0)}ms</span>
       </div>
+
+      {hasContext && (
+        <div style={styles.contextSection}>
+          {systemPersona && (
+            <div style={styles.contextBlock}>
+              <div style={styles.contextLabel}>System</div>
+              <div style={styles.contextContent}>{systemPersona}</div>
+            </div>
+          )}
+          {systemTools && (
+            <div style={styles.contextBlock}>
+              <div style={styles.contextLabel}>Tools</div>
+              <pre style={styles.contextPre}>{systemTools}</pre>
+            </div>
+          )}
+          {userContent && (
+            <div style={styles.contextBlock}>
+              <div style={styles.contextLabel}>User</div>
+              <div style={styles.contextContent}>{userContent}</div>
+            </div>
+          )}
+        </div>
+      )}
+
       {totalCost > 0 && (
         <div style={styles.costLine}>Total: ${totalCost.toFixed(4)}</div>
       )}
@@ -114,5 +145,42 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 12,
     color: "#3fb950",
     fontFamily: "monospace",
+  },
+  contextSection: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTop: "1px solid #2d333b",
+    display: "flex",
+    flexDirection: "column",
+    gap: 12,
+  },
+  contextBlock: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+  },
+  contextLabel: {
+    fontSize: 11,
+    fontWeight: 600,
+    color: "#8b949e",
+    textTransform: "uppercase",
+    letterSpacing: "0.5px",
+  },
+  contextContent: {
+    fontSize: 13,
+    color: "#c9d1d9",
+    lineHeight: 1.5,
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+  },
+  contextPre: {
+    fontSize: 11,
+    color: "#8b949e",
+    background: "#0d1117",
+    padding: 8,
+    borderRadius: 4,
+    overflow: "auto",
+    maxHeight: 200,
+    margin: 0,
   },
 };
