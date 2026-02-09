@@ -21,6 +21,10 @@ Recording (recommended wrappers)::
     record_llm_usage(usage_or_kwargs)
     record_tool_usage(usage: ToolUsageDelta)
 
+Initialization::
+
+    init(*, endpoint="http://localhost:4318/v1/traces", service_name="yuutrace", ...)
+
 Low-level::
 
     current_span() -> Span
@@ -51,6 +55,9 @@ from .context import (
 from .cost import record_cost, record_cost_delta
 from .usage import record_llm_usage, record_tool_usage
 
+# -- Initialization --------------------------------------------------------
+from .init import TracingNotInitializedError, init
+
 # -- Low-level -------------------------------------------------------------
 from .span import NoActiveSpanError, add_event, current_span
 
@@ -72,6 +79,9 @@ __all__ = [
     "record_cost_delta",
     "record_llm_usage",
     "record_tool_usage",
+    # Initialization
+    "init",
+    "TracingNotInitializedError",
     # Low-level
     "current_span",
     "add_event",

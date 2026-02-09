@@ -56,8 +56,9 @@ def add_event(name: str, attributes: OtelAttributes) -> None:
     span.add_event(name, attributes=attributes)  # type: ignore[arg-type]
 
 
-def set_span_error(error: BaseException) -> None:
-    """Mark the current span as errored with the given exception."""
-    span = current_span()
+def set_span_error(span: Span, error: BaseException) -> None:
+    """Mark the given span as errored with the given exception."""
+    if not span.is_recording():
+        return
     span.set_status(StatusCode.ERROR, str(error))
     span.record_exception(error)

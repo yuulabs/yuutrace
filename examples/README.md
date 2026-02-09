@@ -86,22 +86,12 @@ The example simulates a realistic agent conversation:
 
 The example demonstrates several important patterns:
 
-#### 0. OpenTelemetry Setup (Required)
+#### 0. Tracing Setup (Required)
 
 ```python
-import os
-from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+import yuutrace as ytrace
 
-# IMPORTANT: Must set JSON protocol before creating exporter
-os.environ["OTEL_EXPORTER_OTLP_TRACES_PROTOCOL"] = "http/json"
-
-provider = TracerProvider()
-otlp_exporter = OTLPSpanExporter(endpoint="http://localhost:4318")
-provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
-trace.set_tracer_provider(provider)
+ytrace.init(service_name="weather-agent-example", service_version="1.0.0")
 ```
 
 #### 1. Conversation Context
@@ -186,7 +176,7 @@ ytrace.record_cost(
 
 To instrument your own agent:
 
-1. **Setup OpenTelemetry** to export to ytrace server
+1. **Initialize tracing** (recommended): `ytrace.init(...)`
 2. **Wrap conversations** with `ytrace.conversation()`
 3. **Track LLM calls** with `chat.llm_gen()` and record usage/cost
 4. **Track tool calls** with `chat.tools()` and record usage/cost

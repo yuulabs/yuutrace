@@ -27,40 +27,16 @@ import time
 from uuid import uuid4
 
 import yuutrace as ytrace
-from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 
 # ---------------------------------------------------------------------------
-# Setup OpenTelemetry
+# Setup tracing
 # ---------------------------------------------------------------------------
 
 
 def setup_tracing():
-    """Configure OpenTelemetry to export to ytrace server."""
-    resource = Resource.create(
-        {
-            "service.name": "weather-agent-example",
-            "service.version": "1.0.0",
-        }
-    )
-
-    provider = TracerProvider(resource=resource)
-
-    # Export to ytrace server (OTLP/HTTP with Protobuf encoding)
-    # The exporter automatically appends /v1/traces to the endpoint
-    otlp_exporter = OTLPSpanExporter(
-        endpoint="http://localhost:4318/v1/traces",
-        timeout=10,
-    )
-
-    provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
-    trace.set_tracer_provider(provider)
-
-    print("✓ OpenTelemetry configured to export to http://localhost:4318/v1/traces")
+    ytrace.init(service_name="weather-agent-example", service_version="1.0.0")
+    print("✓ Tracing configured to export to http://localhost:4318/v1/traces")
 
 
 # ---------------------------------------------------------------------------

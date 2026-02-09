@@ -17,6 +17,7 @@ import msgspec
 from opentelemetry import context as otel_context
 from opentelemetry import trace
 
+from .init import require_initialized
 from .otel import (
     ATTR_AGENT,
     ATTR_CONTEXT_SYSTEM_PERSONA,
@@ -133,7 +134,7 @@ class ToolsContext:
 
                     return ToolResult(tool_call_id=tool_call_id, output=result)
                 except Exception as exc:
-                    set_span_error(exc)
+                    set_span_error(tool_span, exc)
                     error_msg = f"{type(exc).__name__}: {exc}"
                     tool_span.set_attribute("yuu.tool.error", error_msg)
                     return ToolResult(
@@ -194,7 +195,7 @@ class ConversationContext:
             try:
                 yield ctx
             except Exception as exc:
-                set_span_error(exc)
+                set_span_error(span, exc)
                 raise
 
     @contextmanager
@@ -211,7 +212,7 @@ class ConversationContext:
             try:
                 yield ctx
             except Exception as exc:
-                set_span_error(exc)
+                set_span_error(span, exc)
                 raise
 
 
@@ -264,6 +265,7 @@ def conversation(
         # Flatten dict tags to a list of "key=value" strings for OTEL
         attrs[ATTR_CONVERSATION_TAGS] = [f"{k}={v}" for k, v in tags.items()]
 
+    require_initialized()
     tracer = trace.get_tracer("yuutrace")
     with tracer.start_as_current_span(
         "conversation",
@@ -273,5 +275,5 @@ def conversation(
         try:
             yield ctx
         except Exception as exc:
-            set_span_error(exc)
+            set_span_error(span, exc)
             raise

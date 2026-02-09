@@ -44,28 +44,15 @@ This starts an OTLP/HTTP JSON endpoint at `http://localhost:4318`.
 
 ### 2. Configure Your Application
 
-Set up OpenTelemetry to export traces to the collector:
+Initialize tracing to export traces to the collector:
 
 ```python
-import os
-from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+import yuutrace as ytrace
 
-# IMPORTANT: Set JSON protocol before creating exporter
-os.environ["OTEL_EXPORTER_OTLP_TRACES_PROTOCOL"] = "http/json"
-
-# Configure tracer provider
-provider = TracerProvider()
-otlp_exporter = OTLPSpanExporter(
-    endpoint="http://localhost:4318",  # Don't include /v1/traces
-)
-provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
-trace.set_tracer_provider(provider)
+ytrace.init(service_name="my-agent")
 ```
 
-Or use environment variables:
+If you already configure OpenTelemetry elsewhere, yuutrace will reuse it (and you can skip ytrace.init()).
 
 ```bash
 export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/json
