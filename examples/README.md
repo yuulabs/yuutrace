@@ -1,0 +1,195 @@
+# yuutrace Examples
+
+This directory contains example code demonstrating how to use yuutrace for instrumenting LLM agent applications.
+
+## Weather Agent Example
+
+**File:** `weather_agent.py`
+
+A comprehensive example showing a multi-turn weather assistant agent with:
+
+- **Multiple LLM calls** with realistic token usage and cost tracking
+- **Tool execution** (weather API, temperature conversion, web search)
+- **Cache token tracking** (simulating prompt caching)
+- **Error handling** with retries
+- **Nested tool calls** and concurrent execution
+- **Cost and usage metrics** for both LLM and tool operations
+
+### Running the Example
+
+#### 1. Start the trace collector
+
+In one terminal, start the ytrace server to collect traces:
+
+```bash
+ytrace server --db ./traces.db --port 4318
+```
+
+This starts an OTLP/HTTP JSON collector that stores traces to SQLite.
+
+#### 2. Run the example
+
+In another terminal, run the weather agent example:
+
+```bash
+python examples/weather_agent.py
+```
+
+You should see output showing the agent's conversation flow, tool calls, and trace export confirmation.
+
+#### 3. View traces in the UI
+
+Start the web UI to visualize the collected traces:
+
+```bash
+ytrace ui --db ./traces.db --port 8080
+```
+
+Then open http://localhost:8080 in your browser.
+
+### What to Look For in the UI
+
+Once you open the UI, you'll be able to:
+
+1. **Browse conversations** - See all collected conversation traces in a searchable list
+2. **View conversation flow** - See the waterfall of LLM calls and tool executions
+3. **Inspect costs** - See cost breakdown by category (LLM vs tools) and by model
+4. **Analyze token usage** - View input/output/cache token counts for each LLM call
+5. **Examine timing** - See the duration and timeline of each operation
+6. **Debug errors** - Identify failed tool calls and error messages
+
+### Example Output
+
+The example simulates a realistic agent conversation:
+
+```
+👤 User: What's the weather like in Tokyo and San Francisco? Compare them.
+
+���� Turn 1: Planning tool calls...
+🔧 Executing tools: get_weather (Tokyo), get_weather (San Francisco)
+   ✓ Tokyo: 24°C, sunny
+   ✓ San Francisco: 18°C, cloudy
+
+🤖 Turn 2: Synthesizing weather comparison (with cache)...
+   Tokyo is currently 24°C and sunny, while San Francisco is 18°C and cloudy.
+
+👤 User: Can you convert Tokyo's temperature to Fahrenheit?
+
+🤖 Turn 3: Converting temperature...
+   ✓ 24°C = 75.2°F
+
+🤖 Turn 4: Providing final answer...
+   Tokyo's temperature of 24°C is 75.2°F.
+```
+
+### Key Instrumentation Patterns
+
+The example demonstrates several important patterns:
+
+#### 0. OpenTelemetry Setup (Required)
+
+```python
+import os
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+# IMPORTANT: Must set JSON protocol before creating exporter
+os.environ["OTEL_EXPORTER_OTLP_TRACES_PROTOCOL"] = "http/json"
+
+provider = TracerProvider()
+otlp_exporter = OTLPSpanExporter(endpoint="http://localhost:4318")
+provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
+trace.set_tracer_provider(provider)
+```
+
+#### 1. Conversation Context
+
+```python
+with ytrace.conversation(
+    id=uuid4(),
+    agent="weather-assistant",
+    model="gpt-4o",
+    tags={"environment": "demo", "user_id": "user_123"},
+) as chat:
+    chat.system(persona=system_prompt, tools=tool_specs)
+    chat.user(user_query)
+    # ... rest of conversation
+```
+
+#### 2. LLM Generation Tracking
+
+```python
+with chat.llm_gen() as gen:
+    response = await call_llm(messages, model=model)
+    gen.log(response_items)
+    
+    # Record token usage
+    ytrace.record_llm_usage(
+        provider="openai",
+        model=model,
+        input_tokens=150,
+        output_tokens=42,
+        cache_read_tokens=50,
+    )
+    
+    # Record cost
+    ytrace.record_cost(
+        category="llm",
+        currency="USD",
+        amount=0.0023,
+        llm_provider="openai",
+        llm_model=model,
+    )
+```
+
+#### 3. Tool Execution
+
+```python
+with chat.tools() as t:
+    results = await t.gather([
+        {
+            "tool_call_id": "call_1",
+            "tool": get_weather,
+            "params": {"city": "Tokyo", "units": "celsius"},
+        },
+        {
+            "tool_call_id": "call_2",
+            "tool": get_weather,
+            "params": {"city": "San Francisco", "units": "celsius"},
+        },
+    ])
+```
+
+#### 4. Tool Usage and Cost Tracking
+
+```python
+# Inside tool function
+ytrace.record_tool_usage(
+    ytrace.ToolUsageDelta(
+        name="get_weather",
+        unit="api_calls",
+        quantity=1.0,
+    )
+)
+
+ytrace.record_cost(
+    category="tool",
+    currency="USD",
+    amount=0.001,
+    tool_name="get_weather",
+)
+```
+
+## Creating Your Own Examples
+
+To instrument your own agent:
+
+1. **Setup OpenTelemetry** to export to ytrace server
+2. **Wrap conversations** with `ytrace.conversation()`
+3. **Track LLM calls** with `chat.llm_gen()` and record usage/cost
+4. **Track tool calls** with `chat.tools()` and record usage/cost
+5. **Run your agent** and view traces in the UI
+
+See `weather_agent.py` for a complete working example.

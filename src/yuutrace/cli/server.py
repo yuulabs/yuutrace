@@ -1,6 +1,6 @@
 """OTEL Collector + SQLite storage backend.
 
-Implements ``ytrace server`` -- receives OTLP/HTTP JSON trace data
+Implements ``ytrace server`` -- receives OTLP/HTTP (JSON or Protobuf) trace data
 and persists it to a SQLite database via :mod:`yuutrace.cli.db`.
 
 Usage::
@@ -9,7 +9,6 @@ Usage::
 
 SDK-side configuration::
 
-    OTEL_EXPORTER_OTLP_PROTOCOL=http/json
     OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 """
 
@@ -18,6 +17,10 @@ from __future__ import annotations
 import json
 import logging
 
+from google.protobuf.json_format import MessageToDict
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
+    ExportTraceServiceRequest,
+)
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -29,30 +32,46 @@ logger = logging.getLogger("yuutrace.server")
 
 
 async def _receive_traces(request: Request) -> Response:
-    """POST /v1/traces — receive OTLP/HTTP JSON and persist to SQLite."""
+    """POST /v1/traces — receive OTLP/HTTP (JSON or Protobuf) and persist to SQLite."""
     content_type = request.headers.get("content-type", "")
-    if "application/json" not in content_type and "application/x-protobuf" not in content_type:
-        # Be lenient: also accept missing content-type
-        if content_type:
-            return JSONResponse(
-                {"error": "Unsupported content type. Use application/json."},
-                status_code=415,
-            )
 
-    if "application/x-protobuf" in content_type:
+    # Determine if this is JSON or Protobuf
+    is_protobuf = "application/x-protobuf" in content_type
+    is_json = "application/json" in content_type
+
+    # Be lenient: if no content-type, try to detect from content
+    if not is_protobuf and not is_json and content_type:
         return JSONResponse(
-            {"error": "Protobuf encoding is not supported. Use http/json."},
+            {
+                "error": "Unsupported content type. Use application/json or application/x-protobuf."
+            },
             status_code=415,
         )
 
     try:
-        body = await request.json()
-    except (json.JSONDecodeError, ValueError) as exc:
-        return JSONResponse({"error": f"Invalid JSON: {exc}"}, status_code=400)
+        if is_protobuf or (not is_json and not content_type):
+            # Parse Protobuf
+            body_bytes = await request.body()
+            proto_request = ExportTraceServiceRequest()
+            proto_request.ParseFromString(body_bytes)
+
+            # Convert to dict using camelCase to match OTLP JSON format
+            # preserving_proto_field_name=False converts to camelCase
+            body = MessageToDict(
+                proto_request,
+                preserving_proto_field_name=False,
+                use_integers_for_enums=False,
+            )
+        else:
+            # Parse JSON
+            body = await request.json()
+    except Exception as exc:
+        logger.exception("Failed to parse request body")
+        return JSONResponse({"error": f"Invalid request body: {exc}"}, status_code=400)
 
     resource_spans = body.get("resourceSpans", [])
     if not resource_spans:
-        return JSONResponse({"partialSuccess": None})
+        return JSONResponse({"partialSuccess": {}})
 
     try:
         count = insert_resource_spans(request.app.state.db, resource_spans)
@@ -61,7 +80,7 @@ async def _receive_traces(request: Request) -> Response:
         logger.exception("Failed to insert spans")
         return JSONResponse({"error": "Internal storage error"}, status_code=500)
 
-    return JSONResponse({"partialSuccess": None})
+    return JSONResponse({"partialSuccess": {}})
 
 
 def _build_app(db_path: str) -> Starlette:

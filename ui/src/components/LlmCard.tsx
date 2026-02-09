@@ -15,6 +15,17 @@ export function LlmCard({ span, usage, cost }: LlmCardProps) {
   const durationMs =
     (span.end_time_unix_nano - span.start_time_unix_nano) / 1_000_000;
 
+  // Extract LLM generation items from span attributes
+  const llmGenItems = span.attributes["yuu.llm_gen.items"];
+  let parsedItems: any[] = [];
+  if (typeof llmGenItems === "string") {
+    try {
+      parsedItems = JSON.parse(llmGenItems);
+    } catch (e) {
+      console.error("Failed to parse llm_gen.items:", e);
+    }
+  }
+
   return (
     <div style={styles.card}>
       <div style={styles.header}>
@@ -64,6 +75,32 @@ export function LlmCard({ span, usage, cost }: LlmCardProps) {
           {usage.requestId && (
             <div style={styles.requestId}>req: {usage.requestId}</div>
           )}
+        </div>
+      )}
+
+      {/* Display LLM generation content */}
+      {parsedItems.length > 0 && (
+        <div style={styles.content}>
+          {parsedItems.map((item, idx) => (
+            <div key={idx} style={styles.contentItem}>
+              {item.type === "text" && (
+                <div style={styles.textContent}>{item.text}</div>
+              )}
+              {item.type === "tool_calls" && (
+                <div style={styles.toolCalls}>
+                  <div style={styles.toolCallsHeader}>🔧 Tool Calls:</div>
+                  {item.tool_calls?.map((tc: any, tcIdx: number) => (
+                    <div key={tcIdx} style={styles.toolCall}>
+                      <span style={styles.toolCallName}>{tc.function}</span>
+                      <span style={styles.toolCallArgs}>
+                        {JSON.stringify(tc.arguments)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
 
@@ -176,6 +213,52 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 11,
     color: "#6e7681",
     fontFamily: "monospace",
+  },
+  content: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTop: "1px solid #21262d",
+  },
+  contentItem: {
+    marginBottom: 6,
+  },
+  textContent: {
+    fontSize: 13,
+    color: "#c9d1d9",
+    lineHeight: 1.5,
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+  },
+  toolCalls: {
+    fontSize: 12,
+    color: "#8b949e",
+  },
+  toolCallsHeader: {
+    fontWeight: 600,
+    marginBottom: 4,
+    color: "#3fb950",
+  },
+  toolCall: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 2,
+    marginLeft: 12,
+    marginBottom: 4,
+    padding: "4px 8px",
+    background: "#0d1117",
+    borderRadius: 4,
+    borderLeft: "2px solid #3fb950",
+  },
+  toolCallName: {
+    fontWeight: 600,
+    color: "#58a6ff",
+    fontFamily: "monospace",
+  },
+  toolCallArgs: {
+    fontSize: 11,
+    color: "#8b949e",
+    fontFamily: "monospace",
+    wordBreak: "break-all",
   },
   error: {
     marginTop: 6,

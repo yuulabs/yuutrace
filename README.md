@@ -20,6 +20,135 @@ ytrace server ──OTLP/HTTP JSON──▶ SQLite
 ytrace ui ──REST API──▶ Browser (@yuutrace/ui)
 ```
 
+## Installation
+
+```bash
+# Python SDK (includes CLI tools)
+pip install yuutrace
+
+# React components (for embedding in your own dashboard)
+npm install @yuutrace/ui
+```
+
+## Quick Start
+
+### 1. Start the Trace Collector
+
+The collector receives traces from your instrumented application and stores them in SQLite:
+
+```bash
+ytrace server --db ./traces.db --port 4318
+```
+
+This starts an OTLP/HTTP JSON endpoint at `http://localhost:4318`.
+
+### 2. Configure Your Application
+
+Set up OpenTelemetry to export traces to the collector:
+
+```python
+import os
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+# IMPORTANT: Set JSON protocol before creating exporter
+os.environ["OTEL_EXPORTER_OTLP_TRACES_PROTOCOL"] = "http/json"
+
+# Configure tracer provider
+provider = TracerProvider()
+otlp_exporter = OTLPSpanExporter(
+    endpoint="http://localhost:4318",  # Don't include /v1/traces
+)
+provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
+trace.set_tracer_provider(provider)
+```
+
+Or use environment variables:
+
+```bash
+export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/json
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+```
+
+### 3. Instrument Your Agent Code
+
+Use yuutrace context managers to wrap your agent logic:
+
+```python
+import yuutrace as ytrace
+from uuid import uuid4
+
+# Open a conversation span
+with ytrace.conversation(id=uuid4(), agent="my-agent", model="gpt-4o") as chat:
+    chat.system(persona="You are helpful.", tools=tool_specs)
+    chat.user("What is Bitcoin price?")
+
+    # LLM generation
+    with chat.llm_gen() as gen:
+        response = await llm.call(messages)
+        gen.log(response.items)
+
+        # Record token usage
+        ytrace.record_llm_usage(
+            provider="openai",
+            model="gpt-4o",
+            input_tokens=150,
+            output_tokens=42,
+        )
+
+        # Record cost
+        ytrace.record_cost(
+            category="llm",
+            currency="USD",
+            amount=0.0023,
+        )
+
+    # Tool execution
+    with chat.tools() as t:
+        results = await t.gather([
+            {"tool_call_id": "call_1", "tool": search_fn, "params": {"q": "BTC"}},
+        ])
+```
+
+### 4. View Traces in the Web UI
+
+Start the web UI to visualize collected traces:
+
+```bash
+ytrace ui --db ./traces.db --port 8080
+```
+
+Open **http://localhost:8080** in your browser. The UI provides:
+
+- **Conversation List** — Browse all collected traces with search and filtering
+- **Conversation Flow** — Waterfall view of LLM calls and tool executions
+- **Cost Analysis** — Breakdown by category (LLM vs tools) and model
+- **Token Usage** — Input/output/cache token metrics for each LLM call
+- **Timeline View** — Gantt chart showing operation durations and concurrency
+- **Span Details** — Inspect individual spans with full attributes and events
+
+## Examples
+
+Check out the [examples/](examples/) directory for complete working examples:
+
+- **[weather_agent.py](examples/weather_agent.py)** — Multi-turn agent with LLM calls, tool execution, cost tracking, and error handling
+
+To run the example:
+
+```bash
+# Terminal 1: Start collector
+ytrace server --db ./traces.db --port 4318
+
+# Terminal 2: Run example
+python examples/weather_agent.py
+
+# Terminal 3: Start UI
+ytrace ui --db ./traces.db --port 8080
+# Open http://localhost:8080
+```
+
 ## Key Concepts
 
 ### Span Hierarchy
@@ -56,101 +185,54 @@ Business code never writes these event names or attribute keys directly — the 
 
 `current_span()` raises `NoActiveSpanError` if called outside a span context. No implicit span creation, no silent data loss.
 
-## Installation
+## Python SDK API Reference
 
-```bash
-# Python SDK
-pip install yuutrace
-
-# React components (for embedding in your own dashboard)
-npm install @yuutrace/ui
-```
-
-## Python SDK Usage
-
-```python
-import yuutrace as ytrace
-from uuid import uuid4
-
-# 1. Open a conversation span
-with ytrace.conversation(id=uuid4(), agent="my-agent", model="gpt-4o") as chat:
-    chat.system(persona="You are helpful.", tools=tool_specs)
-    chat.user("What is Bitcoin price?")
-
-    # 2. LLM generation
-    with chat.llm_gen() as gen:
-        response = await llm.call(messages)
-        gen.log(response.items)
-
-        # Record token usage
-        ytrace.record_llm_usage(
-            provider="openai",
-            model="gpt-4o",
-            input_tokens=150,
-            output_tokens=42,
-        )
-
-        # Record cost
-        ytrace.record_cost(
-            category="llm",
-            currency="USD",
-            amount=0.0023,
-        )
-
-    # 3. Tool execution
-    with chat.tools() as t:
-        results = await t.gather([
-            {"tool_call_id": "call_1", "tool": search_fn, "params": {"q": "BTC"}},
-        ])
-```
-
-### SDK API Reference
-
-**Context managers:**
+### Context managers
 
 - `conversation(*, id, agent, model, tags=None)` — root span
 - `ConversationContext.llm_gen()` — child span for LLM call
 - `ConversationContext.tools()` — child span for tool batch
 
-**Recording functions:**
+### Recording functions
 
 - `record_cost(*, category, currency, amount, ...)` — cost delta
 - `record_cost_delta(cost: CostDelta)` — cost delta from struct
 - `record_llm_usage(*, provider, model, input_tokens, output_tokens, ...)` — token usage
 - `record_tool_usage(usage: ToolUsageDelta)` — tool usage
 
-**Types:**
+### Types
 
 - `CostDelta`, `LlmUsageDelta`, `ToolUsageDelta` — frozen msgspec structs
 - `CostCategory` — `"llm"` | `"tool"`
 - `Currency` — `"USD"`
 
-## CLI
+## CLI Reference
 
-### Collector
+### `ytrace server`
 
-Receives OTLP/HTTP JSON and stores to SQLite:
+Receives OTLP/HTTP JSON traces and stores them to SQLite.
 
 ```bash
 ytrace server --db ./traces.db --port 4318
 ```
 
-Configure your OpenTelemetry SDK to export here:
+**Options:**
+- `--db PATH` — SQLite database file path (default: `./traces.db`)
+- `--port PORT` — HTTP server port (default: `4318`)
 
-```bash
-export OTEL_EXPORTER_OTLP_PROTOCOL=http/json
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-```
+### `ytrace ui`
 
-### Web UI
-
-Serves a trace visualization dashboard:
+Serves the trace visualization web UI with REST API.
 
 ```bash
 ytrace ui --db ./traces.db --port 8080
 ```
 
-REST API endpoints:
+**Options:**
+- `--db PATH` — SQLite database file path (default: `./traces.db`)
+- `--port PORT` — HTTP server port (default: `8080`)
+
+**REST API endpoints:**
 
 | Method | Path | Description |
 |---|---|---|
@@ -264,6 +346,9 @@ yuutrace/
 │   │   └── index.ts         # library exports
 │   ├── vite.config.ts       # app build
 │   └── vite.config.lib.ts   # library build
+├── examples/                # Example applications
+│   ├── weather_agent.py     # Multi-turn agent example
+│   └── README.md            # Example documentation
 ├── scripts/
 │   └── build_ui.sh
 └── pyproject.toml

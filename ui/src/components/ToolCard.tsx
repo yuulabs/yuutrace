@@ -14,6 +14,10 @@ export function ToolCard({ span, usage, cost }: ToolCardProps) {
     (span.attributes["yuu.tool.name"] as string | undefined) ??
     span.name;
 
+  // Extract tool output from span attributes
+  const toolOutput = span.attributes["yuu.tool.output"];
+  const toolInput = span.attributes["yuu.tool.input"];
+
   return (
     <div style={styles.card}>
       <div style={styles.header}>
@@ -34,6 +38,30 @@ export function ToolCard({ span, usage, cost }: ToolCardProps) {
           <span style={styles.usageLine}>
             {usage.quantity} {usage.unit}
           </span>
+        </div>
+      )}
+
+      {/* Display tool input */}
+      {toolInput && (
+        <div style={styles.ioSection}>
+          <div style={styles.ioLabel}>Input:</div>
+          <div style={styles.ioContent}>
+            {typeof toolInput === "string"
+              ? toolInput
+              : JSON.stringify(toolInput, null, 2)}
+          </div>
+        </div>
+      )}
+
+      {/* Display tool output */}
+      {toolOutput && (
+        <div style={styles.ioSection}>
+          <div style={styles.ioLabel}>Output:</div>
+          <div style={styles.ioContent}>
+            {typeof toolOutput === "string"
+              ? toolOutput
+              : JSON.stringify(toolOutput, null, 2)}
+          </div>
         </div>
       )}
 
@@ -93,6 +121,30 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 12,
     color: "#8b949e",
     fontFamily: "monospace",
+  },
+  ioSection: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTop: "1px solid #21262d",
+  },
+  ioLabel: {
+    fontSize: 11,
+    fontWeight: 600,
+    color: "#8b949e",
+    marginBottom: 4,
+    textTransform: "uppercase",
+  },
+  ioContent: {
+    fontSize: 12,
+    color: "#c9d1d9",
+    fontFamily: "monospace",
+    background: "#0d1117",
+    padding: "6px 8px",
+    borderRadius: 4,
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+    maxHeight: "200px",
+    overflowY: "auto",
   },
   error: {
     marginTop: 6,

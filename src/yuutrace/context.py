@@ -110,25 +110,36 @@ class ToolsContext:
             params: dict[str, Any] = call.get("params", {})
             tool_name = getattr(tool_fn, "__name__", str(tool_fn))
 
+            # Serialize input parameters
+            input_str = json.dumps(params, default=str)
+
             # Create a child span linked to the tools span context
             with self._tracer.start_as_current_span(
                 f"tool:{tool_name}",
                 attributes={
                     "yuu.tool.name": tool_name,
                     "yuu.tool.call_id": tool_call_id,
+                    "yuu.tool.input": input_str,
                 },
             ) as tool_span:
                 try:
                     result = tool_fn(**params)
                     if asyncio.iscoroutine(result) or asyncio.isfuture(result):
                         result = await result
+
+                    # Serialize output
+                    output_str = json.dumps(result, default=str)
+                    tool_span.set_attribute("yuu.tool.output", output_str)
+
                     return ToolResult(tool_call_id=tool_call_id, output=result)
                 except Exception as exc:
                     set_span_error(exc)
+                    error_msg = f"{type(exc).__name__}: {exc}"
+                    tool_span.set_attribute("yuu.tool.error", error_msg)
                     return ToolResult(
                         tool_call_id=tool_call_id,
                         output=None,
-                        error=f"{type(exc).__name__}: {exc}",
+                        error=error_msg,
                     )
 
         results = await asyncio.gather(*[_run_one(c) for c in calls])

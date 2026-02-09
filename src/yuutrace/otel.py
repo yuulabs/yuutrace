@@ -48,6 +48,9 @@ ATTR_LLM_USAGE_TOTAL_TOKENS = "yuu.llm.usage.total_tokens"
 # yuu.tool attributes (shared across cost and usage events)
 ATTR_TOOL_NAME = "yuu.tool.name"
 ATTR_TOOL_CALL_ID = "yuu.tool.call_id"
+ATTR_TOOL_INPUT = "yuu.tool.input"
+ATTR_TOOL_OUTPUT = "yuu.tool.output"
+ATTR_TOOL_ERROR = "yuu.tool.error"
 
 # yuu.tool.usage attributes
 ATTR_TOOL_USAGE_UNIT = "yuu.tool.usage.unit"
