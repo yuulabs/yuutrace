@@ -15,8 +15,15 @@ export function ToolCard({ span, usage, cost }: ToolCardProps) {
     span.name;
 
   // Extract tool output from span attributes
-  const toolOutput = span.attributes["yuu.tool.output"];
-  const toolInput = span.attributes["yuu.tool.input"];
+  const rawToolOutput = span.attributes["yuu.tool.output"];
+  const rawToolInput = span.attributes["yuu.tool.input"];
+
+  const toolInput = rawToolInput != null
+    ? typeof rawToolInput === "string" ? rawToolInput : JSON.stringify(rawToolInput, null, 2)
+    : undefined;
+  const toolOutput = rawToolOutput != null
+    ? typeof rawToolOutput === "string" ? rawToolOutput : JSON.stringify(rawToolOutput, null, 2)
+    : undefined;
 
   return (
     <div style={styles.card}>
@@ -45,11 +52,7 @@ export function ToolCard({ span, usage, cost }: ToolCardProps) {
       {toolInput && (
         <div style={styles.ioSection}>
           <div style={styles.ioLabel}>Input:</div>
-          <div style={styles.ioContent}>
-            {typeof toolInput === "string"
-              ? toolInput
-              : JSON.stringify(toolInput, null, 2)}
-          </div>
+          <div style={styles.ioContent}>{toolInput}</div>
         </div>
       )}
 
@@ -57,11 +60,7 @@ export function ToolCard({ span, usage, cost }: ToolCardProps) {
       {toolOutput && (
         <div style={styles.ioSection}>
           <div style={styles.ioLabel}>Output:</div>
-          <div style={styles.ioContent}>
-            {typeof toolOutput === "string"
-              ? toolOutput
-              : JSON.stringify(toolOutput, null, 2)}
-          </div>
+          <div style={styles.ioContent}>{toolOutput}</div>
         </div>
       )}
 
