@@ -1,6 +1,6 @@
 [project]
 name = "yuutrace"
-version = "0.1.4"
+version = "0.1.5"
 description = "LLM-oriented observability SDK built on OpenTelemetry with cost/usage tracking"
 readme = "README.md"
 authors = [

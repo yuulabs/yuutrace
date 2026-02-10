@@ -68,7 +68,35 @@ class LlmGenContext:
         *items* is serialized to JSON so it fits into an OTEL string
         attribute.
         """
-        serialized = json.dumps(items, default=str)
+        def _jsonable(x: Any) -> Any:
+            if x is None or isinstance(x, str | int | float | bool):
+                return x
+            if isinstance(x, list | tuple):
+                return [_jsonable(i) for i in x]
+            if isinstance(x, dict):
+                return {str(k): _jsonable(v) for k, v in x.items()}
+            if hasattr(x, "__struct_fields__"):
+                try:
+                    return msgspec.to_builtins(x)
+                except Exception:
+                    pass
+            if hasattr(x, "model_dump"):
+                try:
+                    return x.model_dump()
+                except Exception:
+                    pass
+            if hasattr(x, "__dict__"):
+                try:
+                    return {
+                        str(k): _jsonable(v)
+                        for k, v in vars(x).items()
+                        if not str(k).startswith("_")
+                    }
+                except Exception:
+                    pass
+            return str(x)
+
+        serialized = json.dumps([_jsonable(i) for i in items], ensure_ascii=False)
         self._span.set_attribute(ATTR_LLM_GEN_ITEMS, serialized)
 
 
@@ -109,7 +137,16 @@ class ToolsContext:
             tool_call_id: str = call["tool_call_id"]
             tool_fn: Callable[..., Any] = call["tool"]
             params: dict[str, Any] = call.get("params", {})
-            tool_name = getattr(tool_fn, "__name__", str(tool_fn))
+            tool_name = str(call.get("name") or "")
+            if not tool_name:
+                bound_self = getattr(tool_fn, "__self__", None)
+                tool_obj = getattr(bound_self, "_tool", None)
+                spec = getattr(tool_obj, "spec", None)
+                spec_name = getattr(spec, "name", None)
+                if isinstance(spec_name, str) and spec_name:
+                    tool_name = spec_name
+            if not tool_name:
+                tool_name = getattr(tool_fn, "__name__", str(tool_fn))
 
             # Serialize input parameters
             input_str = json.dumps(params, default=str)
