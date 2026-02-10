@@ -93,13 +93,15 @@ def _build_app(db_path: str) -> Starlette:
     return app
 
 
-def run_server(*, db_path: str, port: int) -> None:
+def run_server(*, db_path: str, host: str, port: int) -> None:
     """Start the OTEL collector + SQLite storage server.
 
     Parameters
     ----------
     db_path:
         Path to the SQLite database file.
+    host:
+        Bind host for the OTEL HTTP receiver.
     port:
         Port for the OTEL HTTP receiver.
     """
@@ -109,4 +111,4 @@ def run_server(*, db_path: str, port: int) -> None:
     logger.info("Starting yuutrace collector on port %d (db: %s)", port, db_path)
 
     app = _build_app(db_path)
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+    uvicorn.run(app, host=host, port=port, log_level="info")

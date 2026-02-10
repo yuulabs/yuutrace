@@ -25,6 +25,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Start OTEL collector + SQLite storage backend",
     )
     server_parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind host for the OTEL HTTP receiver (default: 127.0.0.1)",
+    )
+    server_parser.add_argument(
         "--db",
         default="./traces.db",
         help="Path to SQLite database file (default: ./traces.db)",
@@ -40,6 +45,11 @@ def _build_parser() -> argparse.ArgumentParser:
     ui_parser = sub.add_parser(
         "ui",
         help="Start WebUI for trace visualization",
+    )
+    ui_parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind host for the WebUI HTTP server (default: 127.0.0.1)",
     )
     ui_parser.add_argument(
         "--db",
@@ -64,11 +74,11 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "server":
         from .server import run_server
 
-        run_server(db_path=args.db, port=args.port)
+        run_server(db_path=args.db, host=args.host, port=args.port)
     elif args.command == "ui":
         from .ui import run_ui
 
-        run_ui(db_path=args.db, port=args.port)
+        run_ui(db_path=args.db, host=args.host, port=args.port)
     else:
         parser.print_help()
         sys.exit(1)
