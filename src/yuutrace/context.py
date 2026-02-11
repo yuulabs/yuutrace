@@ -149,7 +149,7 @@ class ToolsContext:
                 tool_name = getattr(tool_fn, "__name__", str(tool_fn))
 
             # Serialize input parameters
-            input_str = json.dumps(params, default=str)
+            input_str = json.dumps(params, default=str, ensure_ascii=False)
 
             # Create a child span linked to the tools span context
             with self._tracer.start_as_current_span(
@@ -166,7 +166,7 @@ class ToolsContext:
                         result = await result
 
                     # Serialize output
-                    output_str = json.dumps(result, default=str)
+                    output_str = json.dumps(result, default=str, ensure_ascii=False)
                     tool_span.set_attribute("yuu.tool.output", output_str)
 
                     return ToolResult(tool_call_id=tool_call_id, output=result)

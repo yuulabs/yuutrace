@@ -6,6 +6,24 @@ export interface ToolCardProps {
   cost?: CostEvent;
 }
 
+function formatToolIo(raw: unknown): string | undefined {
+  if (raw == null) return undefined;
+
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return undefined;
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (typeof parsed === "string") return parsed;
+      return JSON.stringify(parsed, null, 2);
+    } catch {
+      return raw;
+    }
+  }
+
+  return JSON.stringify(raw, null, 2);
+}
+
 export function ToolCard({ span, usage, cost }: ToolCardProps) {
   const durationMs =
     (span.end_time_unix_nano - span.start_time_unix_nano) / 1_000_000;
@@ -18,12 +36,8 @@ export function ToolCard({ span, usage, cost }: ToolCardProps) {
   const rawToolOutput = span.attributes["yuu.tool.output"];
   const rawToolInput = span.attributes["yuu.tool.input"];
 
-  const toolInput = rawToolInput != null
-    ? typeof rawToolInput === "string" ? rawToolInput : JSON.stringify(rawToolInput, null, 2)
-    : undefined;
-  const toolOutput = rawToolOutput != null
-    ? typeof rawToolOutput === "string" ? rawToolOutput : JSON.stringify(rawToolOutput, null, 2)
-    : undefined;
+  const toolInput = formatToolIo(rawToolInput);
+  const toolOutput = formatToolIo(rawToolOutput);
 
   return (
     <div style={styles.card}>
