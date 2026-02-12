@@ -32,15 +32,22 @@ export function ToolCard({ span, usage, cost }: ToolCardProps) {
     (span.attributes["yuu.tool.name"] as string | undefined) ??
     span.name;
 
-  // Extract tool output from span attributes
+  // Extract tool I/O and error from span attributes
   const rawToolOutput = span.attributes["yuu.tool.output"];
   const rawToolInput = span.attributes["yuu.tool.input"];
+  const rawToolError = span.attributes["yuu.tool.error"];
 
   const toolInput = formatToolIo(rawToolInput);
   const toolOutput = formatToolIo(rawToolOutput);
+  const toolError =
+    typeof rawToolError === "string" && rawToolError.trim()
+      ? rawToolError.trim()
+      : undefined;
+
+  const hasError = !!toolError;
 
   return (
-    <div style={styles.card}>
+    <div style={hasError ? styles.cardError : styles.card}>
       <div style={styles.header}>
         <div style={styles.headerLeft}>
           <span style={styles.icon}>🔧</span>
@@ -78,8 +85,11 @@ export function ToolCard({ span, usage, cost }: ToolCardProps) {
         </div>
       )}
 
-      {span.status_code === 2 && (
-        <div style={styles.error}>⚠ Error</div>
+      {toolError && (
+        <div style={styles.errorSection}>
+          <div style={styles.errorLabel}>Error:</div>
+          <div style={styles.errorContent}>{toolError}</div>
+        </div>
       )}
     </div>
   );
@@ -159,10 +169,35 @@ const styles: Record<string, React.CSSProperties> = {
     maxHeight: "200px",
     overflowY: "auto",
   },
-  error: {
-    marginTop: 6,
-    fontSize: 12,
-    color: "#f85149",
+  cardError: {
+    background: "#161b22",
+    border: "1px solid #6e2d2d",
+    borderRadius: 8,
+    padding: "12px 16px",
+    borderLeft: "3px solid #f85149",
+  },
+  errorSection: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTop: "1px solid #3d1e1e",
+  },
+  errorLabel: {
+    fontSize: 11,
     fontWeight: 600,
+    color: "#f85149",
+    marginBottom: 4,
+    textTransform: "uppercase",
+  },
+  errorContent: {
+    fontSize: 12,
+    color: "#ffa198",
+    fontFamily: "monospace",
+    background: "#1a0d0d",
+    padding: "6px 8px",
+    borderRadius: 4,
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+    maxHeight: "200px",
+    overflowY: "auto",
   },
 };

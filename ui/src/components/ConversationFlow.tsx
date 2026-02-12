@@ -18,17 +18,18 @@ export interface ConversationFlowProps {
  * ordered by start time.
  */
 export function ConversationFlow({ spans }: ConversationFlowProps) {
-  const sorted = [...spans].sort(
-    (a, b) => a.start_time_unix_nano - b.start_time_unix_nano,
-  );
+  // Filter out the "tools" wrapper span — it contains no I/O data;
+  // individual "tool:*" child spans carry all the useful information.
+  const sorted = spans
+    .filter((s) => s.name !== "tools")
+    .sort((a, b) => a.start_time_unix_nano - b.start_time_unix_nano);
 
   return (
     <div style={styles.container}>
       {sorted.map((span) => {
         const costs = extractCostEvents(span);
         const isLlm = span.name === "llm_gen" || span.name.startsWith("llm");
-        const isTool =
-          span.name === "tools" || span.name.startsWith("tool:");
+        const isTool = span.name.startsWith("tool:");
 
         if (isLlm) {
           const usages = extractLlmUsageEvents(span);
