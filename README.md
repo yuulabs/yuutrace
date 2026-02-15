@@ -127,9 +127,18 @@ ytrace ui --db ./traces.db --port 8080
 LlmGenContext.log(items: list[Any]) -> None
 ```
 
-### What to pass
+### UI-recognised item types
 
-Pass whatever your LLM SDK returns. `gen.log()` auto-serializes each element to JSON:
+The web UI renders **two** item shapes.  Items with other `type` values are stored but **not rendered**.
+
+| `type` | Required fields | UI rendering |
+|---|---|---|
+| `"text"` | `text: str` | Text block with pre-wrap whitespace |
+| `"tool_calls"` | `tool_calls: [{"function": str, "arguments": Any}, ...]` | Tool call list with function name and arguments |
+
+### Serialization
+
+Each element in the list is auto-serialized to JSON before storage:
 
 | Input type | Serialization method |
 |---|---|
@@ -142,7 +151,7 @@ Pass whatever your LLM SDK returns. `gen.log()` auto-serializes each element to 
 ### Best Practice
 
 ```python
-# Pattern 1: Log raw SDK response content (most common)
+# Pattern 1: Log text response (most common)
 with chat.llm_gen() as gen:
     response = await client.chat.completions.create(...)
     message = response.choices[0].message
@@ -150,28 +159,29 @@ with chat.llm_gen() as gen:
         {"type": "text", "text": message.content},
     ])
 
-# Pattern 2: Log tool-call decisions
+# Pattern 2: Log text + tool-call decisions
 with chat.llm_gen() as gen:
     response = await client.chat.completions.create(...)
     message = response.choices[0].message
     gen.log([
         {"type": "text", "text": message.content or ""},
         {"type": "tool_calls", "tool_calls": [
-            {"id": tc.id, "function": tc.function.name,
+            {"function": tc.function.name,
              "arguments": tc.function.arguments}
             for tc in (message.tool_calls or [])
         ]},
     ])
 
 # Pattern 3: Log msgspec / Pydantic models directly
+# (stored as JSON, but only rendered if the serialized dict
+#  matches one of the two shapes above)
 with chat.llm_gen() as gen:
     gen.log([my_msgspec_struct, my_pydantic_model])
-    # Both are auto-serialized to JSON
 ```
 
 ### When to call
 
-Call `gen.log()` **once** per `llm_gen()` block, after you have the LLM response. Calling it multiple times overwrites the previous value (it's a span attribute, not an event).
+Call `gen.log()` **once** per `llm_gen()` block, after you have the LLM response. Calling it multiple times overwrites the previous value (it sets a span attribute, not an event).
 
 ## Key Concepts
 

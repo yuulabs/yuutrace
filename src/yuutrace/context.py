@@ -65,23 +65,35 @@ class LlmGenContext:
     def log(self, items: list[Any]) -> None:
         """Attach LLM response items to this span for later inspection in the UI.
 
-        Each element in *items* is auto-serialized to JSON.  Supported types:
+        The web UI recognises two item shapes:
 
-        - ``dict`` -- passed through as-is.
-        - ``msgspec.Struct`` -- converted via ``msgspec.to_builtins()``.
-        - Pydantic ``BaseModel`` -- converted via ``.model_dump()``.
-        - ``dataclass`` -- converted via ``vars()``, private attrs stripped.
-        - Other objects -- fall back to ``str()``.
+        ``{"type": "text", "text": str}``
+            A text response from the LLM.
 
-        Typical usage -- log whatever the LLM SDK returns::
+        ``{"type": "tool_calls", "tool_calls": [{"function": str, "arguments": Any}, ...]}``
+            Tool-call decisions made by the LLM.
+
+        Items with other ``type`` values are stored but **not rendered** by
+        the default UI.
+
+        Each element is auto-serialized to JSON before storage.  The
+        serializer handles ``dict``, ``msgspec.Struct``
+        (via ``msgspec.to_builtins()``), Pydantic ``BaseModel``
+        (via ``.model_dump()``), dataclasses (via ``vars()``, private attrs
+        stripped), and falls back to ``str()`` for anything else.
+
+        Call ``log()`` **once** per ``llm_gen()`` block -- subsequent calls
+        overwrite the previous value (it sets a span attribute, not an event).
+
+        Example::
 
             with chat.llm_gen() as gen:
                 response = await client.chat(messages)
-                gen.log(response.choices[0].message.content)
-                # or log structured items:
                 gen.log([
-                    {"type": "text", "text": "hello"},
-                    {"type": "tool_calls", "tool_calls": [...]},
+                    {"type": "text", "text": "I'll check the weather."},
+                    {"type": "tool_calls", "tool_calls": [
+                        {"function": "get_weather", "arguments": {"city": "Tokyo"}},
+                    ]},
                 ])
 
         Parameters
