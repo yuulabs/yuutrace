@@ -34,17 +34,11 @@ npm install @yuutrace/ui
 
 ### 1. Start the Trace Collector
 
-The collector receives traces from your instrumented application and stores them in SQLite:
-
 ```bash
 ytrace server --db ./traces.db --port 4318
 ```
 
-This starts an OTLP/HTTP JSON endpoint at `http://localhost:4318`.
-
-### 2. Configure Your Application
-
-Initialize tracing to export traces to the collector:
+### 2. Initialize Tracing
 
 ```python
 import yuutrace as ytrace
@@ -52,89 +46,132 @@ import yuutrace as ytrace
 ytrace.init(service_name="my-agent")
 ```
 
-If you already configure OpenTelemetry elsewhere, yuutrace will reuse it (and you can skip ytrace.init()).
+If you already configure OpenTelemetry elsewhere, yuutrace reuses the existing `TracerProvider` and `init()` becomes a no-op.
 
-```bash
-export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/json
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-```
+### 3. Instrument Your Agent
 
-### 3. Instrument Your Agent Code
-
-Use yuutrace context managers to wrap your agent logic:
+Below is a minimal but complete example covering the core workflow: conversation → LLM generation → tool execution.
 
 ```python
 import yuutrace as ytrace
 from uuid import uuid4
 
-# Open a conversation span
-with ytrace.conversation(id=uuid4(), agent="my-agent", model="gpt-4o") as chat:
-    chat.system(persona="You are helpful.", tools=tool_specs)
-    chat.user("What is Bitcoin price?")
+ytrace.init(service_name="my-agent")
 
-    # LLM generation
-    with chat.llm_gen() as gen:
-        response = await llm.call(messages)
-        gen.log(response.items)
+async def agent_turn(user_msg: str):
+    with ytrace.conversation(
+        id=uuid4(),            # UUID – unique conversation identifier
+        agent="my-agent",      # str  – agent name
+        model="gpt-4o",        # str  – primary model
+        tags={"env": "prod"},  # dict[str, str] | None – filtering tags
+    ) as chat:
 
-        # Record token usage
-        ytrace.record_llm_usage(
-            provider="openai",
-            model="gpt-4o",
-            input_tokens=150,
-            output_tokens=42,
-        )
+        # Record context
+        chat.system(persona="You are helpful.", tools=tool_specs)
+        chat.user(user_msg)
 
-        # Record cost
-        ytrace.record_cost(
-            category="llm",
-            currency="USD",
-            amount=0.0023,
-        )
+        # ── LLM generation ──────────────────────────────────────
+        with chat.llm_gen() as gen:
+            response = await llm.call(messages)
 
-    # Tool execution
-    with chat.tools() as t:
-        results = await t.gather([
-            {"tool_call_id": "call_1", "tool": search_fn, "params": {"q": "BTC"}},
-        ])
+            # Log response items for UI inspection
+            gen.log(response.choices[0].message.content)
+
+            # Record token usage (keyword args)
+            ytrace.record_llm_usage(
+                provider="openai",
+                model="gpt-4o",
+                input_tokens=150,
+                output_tokens=42,
+                cache_read_tokens=80,
+            )
+
+            # Record cost
+            ytrace.record_cost(
+                category="llm",        # "llm" | "tool"
+                currency="USD",        # "USD"
+                amount=0.0023,
+                llm_provider="openai",
+                llm_model="gpt-4o",
+            )
+
+        # ── Tool execution ──────────────────────────────────────
+        with chat.tools() as t:
+            results = await t.gather([
+                {
+                    "tool_call_id": "call_1",   # str  – unique call ID
+                    "tool": search_fn,           # Callable – sync or async
+                    "params": {"q": "BTC"},      # dict – keyword args
+                },
+            ])
+            # results: list[ToolResult]
+            # ToolResult.tool_call_id: str
+            # ToolResult.output: Any
+            # ToolResult.error: str | None
 ```
 
-### 4. View Traces in the Web UI
-
-Start the web UI to visualize collected traces:
+### 4. View Traces
 
 ```bash
-ytrace ui --db ./traces.db --port 8080
-```
-
-Open **http://localhost:8080** in your browser. The UI provides:
-
-- **Conversation List** — Browse all collected traces with search and filtering
-- **Conversation Flow** — Waterfall view of LLM calls and tool executions
-- **Cost Analysis** — Breakdown by category (LLM vs tools) and model
-- **Token Usage** — Input/output/cache token metrics for each LLM call
-- **Timeline View** — Gantt chart showing operation durations and concurrency
-- **Span Details** — Inspect individual spans with full attributes and events
-
-## Examples
-
-Check out the [examples/](examples/) directory for complete working examples:
-
-- **[weather_agent.py](examples/weather_agent.py)** — Multi-turn agent with LLM calls, tool execution, cost tracking, and error handling
-
-To run the example:
-
-```bash
-# Terminal 1: Start collector
-ytrace server --db ./traces.db --port 4318
-
-# Terminal 2: Run example
-python examples/weather_agent.py
-
-# Terminal 3: Start UI
 ytrace ui --db ./traces.db --port 8080
 # Open http://localhost:8080
 ```
+
+## `gen.log()` — Logging LLM Response Items
+
+`gen.log(items)` attaches the LLM response to the current `llm_gen` span so you can inspect it in the web UI.
+
+### Signature
+
+```python
+LlmGenContext.log(items: list[Any]) -> None
+```
+
+### What to pass
+
+Pass whatever your LLM SDK returns. `gen.log()` auto-serializes each element to JSON:
+
+| Input type | Serialization method |
+|---|---|
+| `dict`, `list`, `str`, `int`, `float`, `bool`, `None` | Pass-through |
+| `msgspec.Struct` | `msgspec.to_builtins()` |
+| Pydantic `BaseModel` | `.model_dump()` |
+| `dataclass` | `vars()` (private attrs stripped) |
+| Other objects | `str()` fallback |
+
+### Best Practice
+
+```python
+# Pattern 1: Log raw SDK response content (most common)
+with chat.llm_gen() as gen:
+    response = await client.chat.completions.create(...)
+    message = response.choices[0].message
+    gen.log([
+        {"type": "text", "text": message.content},
+    ])
+
+# Pattern 2: Log tool-call decisions
+with chat.llm_gen() as gen:
+    response = await client.chat.completions.create(...)
+    message = response.choices[0].message
+    gen.log([
+        {"type": "text", "text": message.content or ""},
+        {"type": "tool_calls", "tool_calls": [
+            {"id": tc.id, "function": tc.function.name,
+             "arguments": tc.function.arguments}
+            for tc in (message.tool_calls or [])
+        ]},
+    ])
+
+# Pattern 3: Log msgspec / Pydantic models directly
+with chat.llm_gen() as gen:
+    gen.log([my_msgspec_struct, my_pydantic_model])
+    # Both are auto-serialized to JSON
+```
+
+### When to call
+
+Call `gen.log()` **once** per `llm_gen()` block, after you have the LLM response. Calling it multiple times overwrites the previous value (it's a span attribute, not an event).
 
 ## Key Concepts
 
@@ -174,50 +211,184 @@ Business code never writes these event names or attribute keys directly — the 
 
 ## Python SDK API Reference
 
-### Context managers
+### Initialization
 
-- `conversation(*, id, agent, model, tags=None)` — root span
-- `ConversationContext.llm_gen()` — child span for LLM call
-- `ConversationContext.tools()` — child span for tool batch
+```python
+ytrace.init(
+    *,
+    endpoint: str = "http://localhost:4318/v1/traces",
+    service_name: str = "yuutrace",
+    service_version: str | None = None,
+    timeout_seconds: float = 10.0,
+) -> None
+```
 
-### Recording functions
+No-op if OpenTelemetry is already configured. Registers `atexit` shutdown hook.
 
-- `record_cost(*, category, currency, amount, ...)` — cost delta
-- `record_cost_delta(cost: CostDelta)` — cost delta from struct
-- `record_llm_usage(*, provider, model, input_tokens, output_tokens, ...)` — token usage
-- `record_tool_usage(usage: ToolUsageDelta)` — tool usage
+### Context Managers
+
+#### `conversation()`
+
+```python
+ytrace.conversation(
+    *,
+    id: UUID,                            # unique conversation ID
+    agent: str,                          # agent name
+    model: str,                          # primary LLM model
+    tags: dict[str, str] | None = None,  # filtering/grouping tags
+) -> Iterator[ConversationContext]
+```
+
+Root span.  All recording functions must be called inside this (or a child) context.
+
+#### `ConversationContext`
+
+| Method | Signature | Description |
+|---|---|---|
+| `system` | `(persona: str, tools: list[Any] \| None = None) -> None` | Record system prompt and tool specs |
+| `user` | `(content: str) -> None` | Record user message |
+| `llm_gen` | `() -> Iterator[LlmGenContext]` | Open child span for an LLM call |
+| `tools` | `() -> Iterator[ToolsContext]` | Open child span for a tool batch |
+
+#### `LlmGenContext`
+
+| Method | Signature | Description |
+|---|---|---|
+| `log` | `(items: list[Any]) -> None` | Attach LLM response items (auto-serialized to JSON) |
+
+#### `ToolsContext`
+
+| Method | Signature | Description |
+|---|---|---|
+| `gather` | `(calls: list[dict[str, Any]]) -> list[ToolResult]` | Execute tools concurrently |
+
+Each call dict: `{"tool_call_id": str, "tool": Callable, "params": dict, "name": str (optional)}`.
+
+#### `ToolResult`
+
+```python
+class ToolResult(msgspec.Struct, frozen=True):
+    tool_call_id: str
+    output: Any
+    error: str | None = None
+```
+
+### Recording Functions
+
+#### `record_llm_usage()`
+
+Accepts either a pre-built struct **or** keyword arguments:
+
+```python
+# Keyword args (most common)
+ytrace.record_llm_usage(
+    provider: str,                       # e.g. "openai", "anthropic"
+    model: str,                          # e.g. "gpt-4o", "claude-sonnet-4-20250514"
+    request_id: str | None = None,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    total_tokens: int | None = None,     # auto-computed if None
+)
+
+# Or pass a struct
+ytrace.record_llm_usage(LlmUsageDelta(...))
+```
+
+#### `record_cost()` / `record_cost_delta()`
+
+```python
+ytrace.record_cost(
+    category: str,       # "llm" | "tool"
+    currency: str,       # "USD"
+    amount: float,       # incremental cost
+    # LLM-specific (when category="llm")
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+    llm_request_id: str | None = None,
+    # Tool-specific (when category="tool")
+    tool_name: str | None = None,
+    tool_call_id: str | None = None,
+    # General
+    source: str | None = None,
+    pricing_id: str | None = None,
+)
+
+# Or pass a struct
+ytrace.record_cost_delta(CostDelta(...))
+```
+
+#### `record_tool_usage()`
+
+```python
+ytrace.record_tool_usage(
+    ToolUsageDelta(
+        name="get_weather",     # tool name
+        unit="api_calls",       # unit of measurement
+        quantity=1.0,           # amount
+        call_id="call_1",       # optional correlation ID
+    )
+)
+```
 
 ### Types
 
-- `CostDelta`, `LlmUsageDelta`, `ToolUsageDelta` — frozen msgspec structs
+All types are frozen `msgspec.Struct` instances (immutable, fast serialization).
+
+| Type | Required Fields | Optional Fields |
+|---|---|---|
+| `CostDelta` | `category`, `currency`, `amount` | `source`, `pricing_id`, `llm_provider`, `llm_model`, `llm_request_id`, `tool_name`, `tool_call_id` |
+| `LlmUsageDelta` | `provider`, `model` | `request_id`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `total_tokens` |
+| `ToolUsageDelta` | `name`, `unit`, `quantity` | `call_id` |
+
+Enums:
 - `CostCategory` — `"llm"` | `"tool"`
 - `Currency` — `"USD"`
+
+### Low-level
+
+| Function | Signature | Description |
+|---|---|---|
+| `current_span()` | `-> Span` | Return active OTEL span; raises `NoActiveSpanError` if none |
+| `add_event()` | `(name: str, attributes: dict) -> None` | Add event to current span (prefer typed wrappers above) |
+
+### Errors
+
+| Error | When |
+|---|---|
+| `TracingNotInitializedError` | `conversation()` called before `init()` or external OTEL setup |
+| `NoActiveSpanError` | Recording function called outside any span context |
 
 ## CLI Reference
 
 ### `ytrace server`
 
-Receives OTLP/HTTP JSON traces and stores them to SQLite.
+Receives OTLP/HTTP traces (JSON or Protobuf) and stores them to SQLite.
 
 ```bash
-ytrace server --db ./traces.db --port 4318
+ytrace server --db ./traces.db --port 4318 --host 127.0.0.1
 ```
 
-**Options:**
-- `--db PATH` — SQLite database file path (default: `./traces.db`)
-- `--port PORT` — HTTP server port (default: `4318`)
+| Option | Default | Description |
+|---|---|---|
+| `--db` | `./traces.db` | SQLite database file path |
+| `--port` | `4318` | HTTP server port |
+| `--host` | `127.0.0.1` | Bind address |
 
 ### `ytrace ui`
 
 Serves the trace visualization web UI with REST API.
 
 ```bash
-ytrace ui --db ./traces.db --port 8080
+ytrace ui --db ./traces.db --port 8080 --host 127.0.0.1
 ```
 
-**Options:**
-- `--db PATH` — SQLite database file path (default: `./traces.db`)
-- `--port PORT` — HTTP server port (default: `8080`)
+| Option | Default | Description |
+|---|---|---|
+| `--db` | `./traces.db` | SQLite database file path |
+| `--port` | `8080` | HTTP server port |
+| `--host` | `127.0.0.1` | Bind address |
 
 **REST API endpoints:**
 
@@ -275,11 +446,29 @@ function MyDashboard({ conversation }) {
 - `extractLlmUsageEvents(span)` — LLM usage from a single span
 - `extractToolUsageEvents(span)` — tool usage from a single span
 
+## Examples
+
+See [examples/](examples/) for complete working examples:
+
+- **[weather_agent.py](examples/weather_agent.py)** — Multi-turn agent with LLM calls, tool execution, cost tracking, and error handling
+
+```bash
+# Terminal 1: Start collector
+ytrace server --db ./traces.db --port 4318
+
+# Terminal 2: Run example
+python examples/weather_agent.py
+
+# Terminal 3: Start UI
+ytrace ui --db ./traces.db --port 8080
+# Open http://localhost:8080
+```
+
 ## Development
 
 ### Prerequisites
 
-- Python >= 3.14
+- Python >= 3.12
 - Node.js >= 20
 - [uv](https://docs.astral.sh/uv/) (Python package manager)
 

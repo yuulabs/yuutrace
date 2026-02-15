@@ -41,11 +41,38 @@ def record_cost(
     tool_name: str | None = None,
     tool_call_id: str | None = None,
 ) -> None:
-    """Convenience wrapper: build a ``CostDelta`` from keyword args and record it.
+    """Build a ``CostDelta`` from keyword args and record it on the current span.
 
-    This is a thin façade over ``record_cost_delta``; it exists so that
-    callers don't need to import ``CostDelta`` / ``CostCategory`` /
-    ``Currency`` for simple one-off recordings.
+    This is a convenience wrapper over ``record_cost_delta`` so that callers
+    don't need to import ``CostDelta`` / ``CostCategory`` / ``Currency``.
+
+    Parameters
+    ----------
+    category:
+        ``"llm"`` or ``"tool"`` (accepts ``CostCategory`` enum or plain str).
+    currency:
+        Currency code, currently only ``"USD"`` (accepts ``Currency`` or str).
+    amount:
+        Incremental cost in the given currency.
+    source:
+        Free-form source label (e.g. ``"openai-api"``).
+    pricing_id:
+        Identifier for the pricing rule that produced this cost.
+    llm_provider:
+        LLM provider name (when ``category="llm"``).
+    llm_model:
+        LLM model name (when ``category="llm"``).
+    llm_request_id:
+        LLM request ID for correlation.
+    tool_name:
+        Tool name (when ``category="tool"``).
+    tool_call_id:
+        Tool call ID for correlation.
+
+    Raises
+    ------
+    NoActiveSpanError
+        If there is no active recording span.
     """
     record_cost_delta(
         CostDelta(

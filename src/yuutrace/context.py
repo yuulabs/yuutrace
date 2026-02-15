@@ -54,7 +54,7 @@ class ToolResult(msgspec.Struct, frozen=True):
 class LlmGenContext:
     """Context returned by ``ConversationContext.llm_gen()``.
 
-    Allows logging the raw LLM response items on the current llm span.
+    Allows logging the raw LLM response items on the current ``llm_gen`` span.
     """
 
     __slots__ = ("_span",)
@@ -63,10 +63,33 @@ class LlmGenContext:
         self._span = span
 
     def log(self, items: list[Any]) -> None:
-        """Attach LLM response items as a span attribute.
+        """Attach LLM response items to this span for later inspection in the UI.
 
-        *items* is serialized to JSON so it fits into an OTEL string
-        attribute.
+        Each element in *items* is auto-serialized to JSON.  Supported types:
+
+        - ``dict`` -- passed through as-is.
+        - ``msgspec.Struct`` -- converted via ``msgspec.to_builtins()``.
+        - Pydantic ``BaseModel`` -- converted via ``.model_dump()``.
+        - ``dataclass`` -- converted via ``vars()``, private attrs stripped.
+        - Other objects -- fall back to ``str()``.
+
+        Typical usage -- log whatever the LLM SDK returns::
+
+            with chat.llm_gen() as gen:
+                response = await client.chat(messages)
+                gen.log(response.choices[0].message.content)
+                # or log structured items:
+                gen.log([
+                    {"type": "text", "text": "hello"},
+                    {"type": "tool_calls", "tool_calls": [...]},
+                ])
+
+        Parameters
+        ----------
+        items:
+            A list of response items.  Each item can be any JSON-serializable
+            object, a ``msgspec.Struct``, a Pydantic model, a dataclass, or
+            any object with a ``__dict__``.
         """
         def _jsonable(x: Any) -> Any:
             if x is None or isinstance(x, str | int | float | bool):
@@ -122,14 +145,43 @@ class ToolsContext:
         self,
         calls: list[dict[str, Any]],
     ) -> list[ToolResult]:
-        """Execute tool calls and return their results.
+        """Execute tool calls concurrently, each in its own child span.
 
-        Each *call* dict must contain:
-        - ``tool_call_id``: str
-        - ``tool``: an async callable (or sync callable)
-        - ``params``: dict of keyword arguments
+        Parameters
+        ----------
+        calls:
+            A list of call descriptors.  Each dict has the following keys:
 
-        A child span is created for each tool invocation.
+            - ``tool_call_id`` (``str``, required) -- unique ID for this call.
+            - ``tool`` (``Callable``, required) -- sync or async callable to invoke.
+            - ``params`` (``dict[str, Any]``, optional) -- keyword arguments
+              forwarded to *tool* via ``tool(**params)``.
+            - ``name`` (``str``, optional) -- display name for the span.
+              If omitted, inferred from ``tool.__self__._tool.spec.name``
+              or ``tool.__name__``.
+
+        Returns
+        -------
+        list[ToolResult]
+            One ``ToolResult`` per call, in the same order as *calls*.
+            If a tool raises, the corresponding result has ``error`` set
+            and ``output`` is ``None``.
+
+        Example::
+
+            with chat.tools() as t:
+                results = await t.gather([
+                    {
+                        "tool_call_id": "call_1",
+                        "tool": search_fn,
+                        "params": {"q": "BTC price"},
+                    },
+                    {
+                        "tool_call_id": "call_2",
+                        "tool": get_weather,
+                        "params": {"city": "Tokyo"},
+                    },
+                ])
         """
         import asyncio
 
