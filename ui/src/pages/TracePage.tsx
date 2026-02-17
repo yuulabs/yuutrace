@@ -17,7 +17,9 @@ export function TracePage() {
     selectedConversation,
     loading,
     error,
+    hasMore,
     selectConversation,
+    loadMore,
   } = useTraceData();
 
   const parsed = selectedConversation
@@ -32,6 +34,8 @@ export function TracePage() {
           conversations={conversations}
           selectedId={selectedConversation?.id}
           onSelect={selectConversation}
+          hasMore={hasMore}
+          onLoadMore={loadMore}
         />
       </div>
 

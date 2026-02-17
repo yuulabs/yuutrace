@@ -1,12 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Conversation, ConversationSummary } from "../types";
+
+const PAGE_SIZE = 50;
 
 interface UseTraceDataReturn {
   conversations: ConversationSummary[];
   selectedConversation: Conversation | null;
   loading: boolean;
   error: string | null;
+  hasMore: boolean;
   selectConversation: (id: string) => void;
+  loadMore: () => void;
   refresh: () => void;
 }
 
@@ -23,21 +27,44 @@ export function useTraceData(baseUrl = ""): UseTraceDataReturn {
     useState<Conversation | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const totalRef = useRef(0);
+  const loadedRef = useRef(0);
+  const loadingMore = useRef(false);
 
-  const fetchConversations = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`${baseUrl}/api/conversations`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setConversations(data.conversations ?? []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [baseUrl]);
+  const fetchPage = useCallback(
+    async (offset: number, append: boolean) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(
+          `${baseUrl}/api/conversations?limit=${PAGE_SIZE}&offset=${offset}`,
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const page: ConversationSummary[] = data.conversations ?? [];
+        totalRef.current = data.total ?? 0;
+        if (append) {
+          loadedRef.current += page.length;
+          setConversations((prev) => [...prev, ...page]);
+        } else {
+          loadedRef.current = page.length;
+          setConversations(page);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setLoading(false);
+        loadingMore.current = false;
+      }
+    },
+    [baseUrl],
+  );
+
+  const loadMore = useCallback(() => {
+    if (loadingMore.current) return;
+    loadingMore.current = true;
+    fetchPage(loadedRef.current, true);
+  }, [fetchPage]);
 
   const selectConversation = useCallback(
     async (id: string) => {
@@ -58,15 +85,19 @@ export function useTraceData(baseUrl = ""): UseTraceDataReturn {
   );
 
   useEffect(() => {
-    fetchConversations();
-  }, [fetchConversations]);
+    fetchPage(0, false);
+  }, [fetchPage]);
+
+  const hasMore = conversations.length < totalRef.current;
 
   return {
     conversations,
     selectedConversation,
     loading,
     error,
+    hasMore,
     selectConversation,
-    refresh: fetchConversations,
+    loadMore,
+    refresh: () => fetchPage(0, false),
   };
 }

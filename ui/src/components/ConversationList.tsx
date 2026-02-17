@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ConversationSummary } from "../types";
 
 export interface ConversationListProps {
   conversations: ConversationSummary[];
   selectedId?: string;
   onSelect?: (id: string) => void;
+  hasMore?: boolean;
+  onLoadMore?: () => void;
 }
 
 function formatTime(nanos: number): string {
@@ -19,8 +21,24 @@ export function ConversationList({
   conversations,
   selectedId,
   onSelect,
+  hasMore,
+  onLoadMore,
 }: ConversationListProps) {
   const [search, setSearch] = useState("");
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !onLoadMore) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore) onLoadMore();
+      },
+      { threshold: 0 },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasMore, onLoadMore]);
 
   const filtered = conversations.filter((c) => {
     const q = search.toLowerCase();
@@ -67,6 +85,11 @@ export function ConversationList({
             <div style={styles.time}>{formatTime(c.start_time)}</div>
           </div>
         ))}
+        {hasMore && (
+          <div ref={sentinelRef} style={styles.loadMore}>
+            Loading more...
+          </div>
+        )}
       </div>
     </div>
   );
@@ -156,5 +179,11 @@ const styles: Record<string, React.CSSProperties> = {
   time: {
     fontSize: 11,
     color: "#6e7681",
+  },
+  loadMore: {
+    padding: 12,
+    color: "#8b949e",
+    textAlign: "center",
+    fontSize: 12,
   },
 };
