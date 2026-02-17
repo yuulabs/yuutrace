@@ -25,16 +25,18 @@ export function ConversationList({
   onLoadMore,
 }: ConversationListProps) {
   const [search, setSearch] = useState("");
+  const listRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const el = sentinelRef.current;
-    if (!el || !onLoadMore) return;
+    const root = listRef.current;
+    if (!el || !root || !onLoadMore) return;
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting && hasMore) onLoadMore();
       },
-      { threshold: 0 },
+      { root, threshold: 0 },
     );
     observer.observe(el);
     return () => observer.disconnect();
@@ -61,7 +63,7 @@ export function ConversationList({
           style={styles.search}
         />
       </div>
-      <div style={styles.list}>
+      <div ref={listRef} style={styles.list}>
         {filtered.length === 0 && (
           <div style={styles.empty}>No conversations found</div>
         )}
