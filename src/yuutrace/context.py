@@ -7,11 +7,16 @@ instrumenting LLM agent workloads.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import contextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from yuuagents.running_tools import OutputBuffer, RunningToolRegistry
 
 import msgspec
 from opentelemetry import context as otel_context
@@ -156,6 +161,10 @@ class ToolsContext:
     async def gather(
         self,
         calls: list[dict[str, Any]],
+        *,
+        soft_timeout: float | None = None,
+        registry: RunningToolRegistry | None = None,
+        buffers: dict[str, OutputBuffer] | None = None,
     ) -> list[ToolResult]:
         """Execute tool calls concurrently, each in its own child span.
 
@@ -171,6 +180,13 @@ class ToolsContext:
             - ``name`` (``str``, optional) -- display name for the span.
               If omitted, inferred from ``tool.__self__._tool.spec.name``
               or ``tool.__name__``.
+        soft_timeout:
+            If set, tools still running after this many seconds are registered
+            in *registry* and a "still running" placeholder result is returned.
+        registry:
+            RunningToolRegistry to register pending tools into.
+        buffers:
+            Mapping from tool_call_id to OutputBuffer for streaming capture.
 
         Returns
         -------
@@ -178,24 +194,7 @@ class ToolsContext:
             One ``ToolResult`` per call, in the same order as *calls*.
             If a tool raises, the corresponding result has ``error`` set
             and ``output`` is ``None``.
-
-        Example::
-
-            with chat.tools() as t:
-                results = await t.gather([
-                    {
-                        "tool_call_id": "call_1",
-                        "tool": search_fn,
-                        "params": {"q": "BTC price"},
-                    },
-                    {
-                        "tool_call_id": "call_2",
-                        "tool": get_weather,
-                        "params": {"city": "Tokyo"},
-                    },
-                ])
         """
-        import asyncio
 
         async def _run_one(call: dict[str, Any]) -> ToolResult:
             tool_call_id: str = call["tool_call_id"]
@@ -244,8 +243,44 @@ class ToolsContext:
                         error=error_msg,
                     )
 
-        results = await asyncio.gather(*[_run_one(c) for c in calls])
-        return list(results)
+        # Build a mapping from asyncio.Task to call descriptor
+        tasks = {asyncio.create_task(_run_one(c)): c for c in calls}
+
+        if soft_timeout is None or registry is None:
+            # No soft timeout — gather as before
+            done_results = await asyncio.gather(*tasks.keys())
+            return list(done_results)
+
+        # Soft timeout path: wait up to soft_timeout, then register pending
+        done, pending = await asyncio.wait(
+            tasks.keys(), timeout=soft_timeout
+        )
+
+        # Collect results for completed tasks, preserving input order
+        results_by_id: dict[str, ToolResult] = {}
+        for t in done:
+            call = tasks[t]
+            results_by_id[call["tool_call_id"]] = t.result()
+
+        # Register pending tasks
+        for t in pending:
+            call = tasks[t]
+            tcid = call["tool_call_id"]
+            name = call.get("name", "")
+            buf = (buffers or {}).get(tcid)
+            if buf is None:
+                from yuuagents.running_tools import OutputBuffer
+                buf = OutputBuffer()
+            handle = registry.register(name, t, buf, tcid)
+            elapsed = soft_timeout
+            tail = buf.tail()
+            placeholder = (
+                f"\u23f3 still running ({elapsed:.0f}s). handle={handle}\n"
+                f"Tail output:\n{tail}"
+            )
+            results_by_id[tcid] = ToolResult(tool_call_id=tcid, output=placeholder)
+
+        return [results_by_id[c["tool_call_id"]] for c in calls]
 
 
 # ---------------------------------------------------------------------------
