@@ -152,11 +152,12 @@ class ToolsContext:
     child spans.
     """
 
-    __slots__ = ("_parent_span", "_tracer")
+    __slots__ = ("_parent_span", "_tracer", "_conversation_id")
 
-    def __init__(self, parent_span: trace.Span, tracer: trace.Tracer) -> None:
+    def __init__(self, parent_span: trace.Span, tracer: trace.Tracer, conversation_id: str | None = None) -> None:
         self._parent_span = parent_span
         self._tracer = tracer
+        self._conversation_id = conversation_id
 
     async def gather(
         self,
@@ -215,13 +216,16 @@ class ToolsContext:
             input_str = json.dumps(params, default=str, ensure_ascii=False)
 
             # Create a child span linked to the tools span context
+            tool_attrs: dict[str, str] = {
+                "yuu.tool.name": tool_name,
+                "yuu.tool.call_id": tool_call_id,
+                "yuu.tool.input": input_str,
+            }
+            if self._conversation_id:
+                tool_attrs[ATTR_CONVERSATION_ID] = self._conversation_id
             with self._tracer.start_as_current_span(
                 f"tool:{tool_name}",
-                attributes={
-                    "yuu.tool.name": tool_name,
-                    "yuu.tool.call_id": tool_call_id,
-                    "yuu.tool.input": input_str,
-                },
+                attributes=tool_attrs,
             ) as tool_span:
                 try:
                     result = tool_fn(**params)
@@ -316,6 +320,11 @@ class ConversationContext:
 
     # -- child contexts ----------------------------------------------------
 
+    @property
+    def conversation_id(self) -> str | None:
+        """Return the conversation ID from the root span, if set."""
+        return self._span.attributes.get(ATTR_CONVERSATION_ID)  # type: ignore[union-attr]
+
     @contextmanager
     def llm_gen(self) -> Iterator[LlmGenContext]:
         """Open a child span for an LLM generation step.
@@ -326,7 +335,11 @@ class ConversationContext:
                 ...
                 gen.log(items)
         """
-        with self._tracer.start_as_current_span("llm_gen") as span:
+        attrs: dict[str, str] = {}
+        cid = self.conversation_id
+        if cid:
+            attrs[ATTR_CONVERSATION_ID] = cid
+        with self._tracer.start_as_current_span("llm_gen", attributes=attrs) as span:
             ctx = LlmGenContext(span)
             try:
                 yield ctx
@@ -343,8 +356,12 @@ class ConversationContext:
             with chat.tools() as t:
                 results = await t.gather([...])
         """
-        with self._tracer.start_as_current_span("tools") as span:
-            ctx = ToolsContext(span, self._tracer)
+        attrs: dict[str, str] = {}
+        cid = self.conversation_id
+        if cid:
+            attrs[ATTR_CONVERSATION_ID] = cid
+        with self._tracer.start_as_current_span("tools", attributes=attrs) as span:
+            ctx = ToolsContext(span, self._tracer, cid)
             try:
                 yield ctx
             except Exception as exc:

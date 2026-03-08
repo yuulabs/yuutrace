@@ -248,10 +248,10 @@ def list_conversations(
     rows = conn.execute(
         f"""SELECT
                 root.conversation_id AS id,
-                root.agent,
-                root.model,
+                MAX(root.agent) AS agent,
+                MAX(root.model) AS model,
                 root.trace_id,
-                COUNT(all_spans.span_id) AS span_count,
+                COUNT(DISTINCT all_spans.span_id) AS span_count,
                 MIN(all_spans.start_time_unix_nano) AS start_time,
                 MAX(all_spans.end_time_unix_nano) AS end_time
             FROM spans root

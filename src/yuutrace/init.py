@@ -7,7 +7,7 @@ from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
 
 
 DEFAULT_ENDPOINT = "http://localhost:4318/v1/traces"
@@ -52,8 +52,8 @@ def init(
 ) -> None:
     """Initialize the OTLP trace exporter.
 
-    Sets up a ``TracerProvider`` with a ``BatchSpanProcessor`` that exports
-    spans to the given OTLP/HTTP endpoint.  If OpenTelemetry is already
+    Sets up a ``TracerProvider`` with a ``SimpleSpanProcessor`` that exports
+    spans immediately to the given OTLP/HTTP endpoint.  If OpenTelemetry is already
     configured (i.e. a non-proxy ``TracerProvider`` exists), this is a no-op
     so yuutrace can coexist with existing instrumentation.
 
@@ -85,7 +85,7 @@ def init(
     exporter = _QuietExporter(
         OTLPSpanExporter(endpoint=endpoint, timeout=timeout_seconds, session=session)
     )
-    tracer_provider.add_span_processor(BatchSpanProcessor(exporter))
+    tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
 
     trace.set_tracer_provider(tracer_provider)
     atexit.register(tracer_provider.shutdown)

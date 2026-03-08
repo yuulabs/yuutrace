@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Conversation, ConversationSummary } from "../types";
 
 const PAGE_SIZE = 50;
+const POLL_INTERVAL_MS = 3000;
 
 interface UseTraceDataReturn {
   conversations: ConversationSummary[];
@@ -18,6 +19,7 @@ interface UseTraceDataReturn {
  * Data-fetching hook for the standalone TracePage.
  *
  * Calls `/api/conversations` and `/api/conversations/:id`.
+ * Auto-polls every 3 seconds for real-time updates.
  * External consumers (e.g. yuuagents dashboard) should NOT use this hook —
  * they provide data directly via component props.
  */
@@ -30,6 +32,7 @@ export function useTraceData(baseUrl = ""): UseTraceDataReturn {
   const totalRef = useRef(0);
   const loadedRef = useRef(0);
   const loadingMore = useRef(false);
+  const selectedIdRef = useRef<string | null>(null);
 
   const fetchPage = useCallback(
     async (offset: number, append: boolean) => {
@@ -60,6 +63,20 @@ export function useTraceData(baseUrl = ""): UseTraceDataReturn {
     [baseUrl],
   );
 
+  const fetchDetail = useCallback(
+    async (id: string) => {
+      try {
+        const res = await fetch(`${baseUrl}/api/conversations/${id}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data: Conversation = await res.json();
+        setSelectedConversation(data);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [baseUrl],
+  );
+
   const loadMore = useCallback(() => {
     if (loadingMore.current) return;
     loadingMore.current = true;
@@ -68,25 +85,37 @@ export function useTraceData(baseUrl = ""): UseTraceDataReturn {
 
   const selectConversation = useCallback(
     async (id: string) => {
+      selectedIdRef.current = id;
       setLoading(true);
       setError(null);
-      try {
-        const res = await fetch(`${baseUrl}/api/conversations/${id}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data: Conversation = await res.json();
-        setSelectedConversation(data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setLoading(false);
-      }
+      await fetchDetail(id);
+      setLoading(false);
     },
-    [baseUrl],
+    [fetchDetail],
   );
 
+  // Initial fetch
   useEffect(() => {
     fetchPage(0, false);
   }, [fetchPage]);
+
+  // Auto-poll conversation list
+  useEffect(() => {
+    const id = setInterval(() => {
+      fetchPage(0, false);
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [fetchPage]);
+
+  // Auto-poll selected conversation detail
+  useEffect(() => {
+    if (!selectedIdRef.current) return;
+    const convId = selectedIdRef.current;
+    const id = setInterval(() => {
+      fetchDetail(convId);
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [selectedConversation?.id, fetchDetail]);
 
   const hasMore = conversations.length < totalRef.current;
 
