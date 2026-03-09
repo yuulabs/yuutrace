@@ -16,6 +16,11 @@ export interface ConversationFlowProps {
  *
  * Renders each span as an LlmCard or ToolCard depending on its name,
  * ordered by start time.
+ *
+ * For multi-turn conversations with continuations, multiple "conversation"
+ * root spans exist (one per run). The system prompt is only shown on the
+ * first one; subsequent spans only show the new user message to avoid
+ * repetition.
  */
 export function ConversationFlow({ spans }: ConversationFlowProps) {
   // Filter out the "tools" wrapper span — it contains no I/O data;
@@ -23,6 +28,15 @@ export function ConversationFlow({ spans }: ConversationFlowProps) {
   const sorted = spans
     .filter((s) => s.name !== "tools")
     .sort((a, b) => a.start_time_unix_nano - b.start_time_unix_nano);
+
+  // Find the earliest "conversation" span so we can suppress repeated system
+  // prompts on continuation spans.
+  const firstConvNano = sorted
+    .filter((s) => s.name === "conversation")
+    .reduce(
+      (min, s) => (s.start_time_unix_nano < min ? s.start_time_unix_nano : min),
+      Infinity,
+    );
 
   return (
     <div style={styles.container}>
@@ -57,21 +71,45 @@ export function ConversationFlow({ spans }: ConversationFlowProps) {
           );
         }
 
-        // Generic span (e.g. conversation root)
-        return <GenericCard key={span.span_id} span={span} costs={costs} />;
+        // Generic span (e.g. conversation root). Continuation spans share the
+        // same conversation ID but are separate root spans — hide their system
+        // prompt to avoid repetition.
+        const isContinuation =
+          span.name === "conversation" &&
+          span.start_time_unix_nano !== firstConvNano;
+        return (
+          <GenericCard
+            key={span.span_id}
+            span={span}
+            costs={costs}
+            hideSystem={isContinuation}
+          />
+        );
       })}
     </div>
   );
 }
 
-function GenericCard({ span, costs }: { span: Span; costs: CostEvent[] }) {
+function GenericCard({
+  span,
+  costs,
+  hideSystem = false,
+}: {
+  span: Span;
+  costs: CostEvent[];
+  hideSystem?: boolean;
+}) {
   const totalCost = costs.reduce((s, c) => s + c.amount, 0);
   const durationMs =
     (span.end_time_unix_nano - span.start_time_unix_nano) / 1_000_000;
 
   // Extract system and user context from conversation span
-  const systemPersona = span.attributes["yuu.context.system.persona"] as string | undefined;
-  const systemTools = span.attributes["yuu.context.system.tools"] as string | undefined;
+  const systemPersona = hideSystem
+    ? undefined
+    : (span.attributes["yuu.context.system.persona"] as string | undefined);
+  const systemTools = hideSystem
+    ? undefined
+    : (span.attributes["yuu.context.system.tools"] as string | undefined);
   const userContent = span.attributes["yuu.context.user.content"] as string | undefined;
 
   const hasContext = systemPersona || systemTools || userContent;

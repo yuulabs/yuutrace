@@ -70,8 +70,15 @@ export function TracePage() {
 
       {/* Right sidebar */}
       <div style={styles.rightSidebar}>
+        {selectedConversation && (
+          <div style={styles.convId}>
+            <div style={styles.convIdLabel}>Conversation ID</div>
+            <div style={styles.convIdValue}>{selectedConversation.id}</div>
+          </div>
+        )}
         {parsed && (
           <>
+            <div style={{ height: selectedConversation ? 12 : 0 }} />
             <CostSummary costs={parsed.costs} />
             <div style={{ height: 12 }} />
             <UsageSummary usages={parsed.usages} />
@@ -107,6 +114,26 @@ const styles: Record<string, React.CSSProperties> = {
     overflowY: "auto",
     padding: 16,
     borderLeft: "1px solid #2d333b",
+  },
+  convId: {
+    background: "#161b22",
+    border: "1px solid #2d333b",
+    borderRadius: 6,
+    padding: "8px 10px",
+  },
+  convIdLabel: {
+    fontSize: 11,
+    fontWeight: 600,
+    color: "#8b949e",
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.5px",
+    marginBottom: 4,
+  },
+  convIdValue: {
+    fontSize: 11,
+    fontFamily: "monospace",
+    color: "#d2a8ff",
+    wordBreak: "break-all" as const,
   },
   status: {
     color: "#8b949e",
