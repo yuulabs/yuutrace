@@ -197,10 +197,8 @@ class ToolsContext:
             and ``output`` is ``None``.
         """
 
-        async def _run_one(call: dict[str, Any]) -> ToolResult:
-            tool_call_id: str = call["tool_call_id"]
+        def _resolve_tool_name(call: dict[str, Any]) -> str:
             tool_fn: Callable[..., Any] = call["tool"]
-            params: dict[str, Any] = call.get("params", {})
             tool_name = str(call.get("name") or "")
             if not tool_name:
                 bound_self = getattr(tool_fn, "__self__", None)
@@ -211,6 +209,13 @@ class ToolsContext:
                     tool_name = spec_name
             if not tool_name:
                 tool_name = getattr(tool_fn, "__name__", str(tool_fn))
+            return tool_name
+
+        async def _run_one(call: dict[str, Any]) -> ToolResult:
+            tool_call_id: str = call["tool_call_id"]
+            tool_fn: Callable[..., Any] = call["tool"]
+            params: dict[str, Any] = call.get("params", {})
+            tool_name = _resolve_tool_name(call)
 
             # Serialize input parameters
             input_str = json.dumps(params, default=str, ensure_ascii=False)
@@ -270,17 +275,19 @@ class ToolsContext:
         for t in pending:
             call = tasks[t]
             tcid = call["tool_call_id"]
-            name = call.get("name", "")
+            name = _resolve_tool_name(call)
             buf = (buffers or {}).get(tcid)
             if buf is None:
                 from yuuagents.running_tools import OutputBuffer
                 buf = OutputBuffer()
             handle = registry.register(name, t, buf, tcid)
-            elapsed = soft_timeout
             tail = buf.tail()
+            tail_display = tail if tail.strip() else "<no output captured yet>"
             placeholder = (
-                f"\u23f3 still running ({elapsed:.0f}s). handle={handle}\n"
-                f"Tail output:\n{tail}"
+                f"\u23f3 tool is still running (soft-timeout={soft_timeout:.0f}s reached). handle={handle}\n"
+                f"name: {name or '?'}\n"
+                f"tool_call_id: {tcid}\n"
+                f"Tail output:\n{tail_display}"
             )
             results_by_id[tcid] = ToolResult(tool_call_id=tcid, output=placeholder)
 

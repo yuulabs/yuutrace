@@ -243,21 +243,19 @@ def list_conversations(
         params,
     ).fetchone()[0]
 
-    # Summaries — join with all spans sharing the same trace_id
-    # so child spans (llm_gen, tool:*) are counted too.
+    # All child spans (llm_gen, tool:*) also carry conversation_id, so we can
+    # aggregate directly by conversation_id across multiple trace_ids (continuations).
     rows = conn.execute(
         f"""SELECT
-                root.conversation_id AS id,
-                MAX(root.agent) AS agent,
-                MAX(root.model) AS model,
-                root.trace_id,
-                COUNT(DISTINCT all_spans.span_id) AS span_count,
-                MIN(all_spans.start_time_unix_nano) AS start_time,
-                MAX(all_spans.end_time_unix_nano) AS end_time
-            FROM spans root
-            JOIN spans all_spans ON all_spans.trace_id = root.trace_id
-            {where.replace("conversation_id", "root.conversation_id").replace("agent", "root.agent")}
-            GROUP BY root.conversation_id
+                conversation_id AS id,
+                MAX(agent) AS agent,
+                MAX(model) AS model,
+                COUNT(DISTINCT span_id) AS span_count,
+                MIN(start_time_unix_nano) AS start_time,
+                MAX(end_time_unix_nano) AS end_time
+            FROM spans
+            {where}
+            GROUP BY conversation_id
             ORDER BY start_time DESC
             LIMIT ? OFFSET ?""",
         [*params, limit, offset],
@@ -266,16 +264,16 @@ def list_conversations(
     conversations = []
     for row in rows:
         d = _row_to_dict(row)
-        trace_id = d.pop("trace_id")
-        # Compute total cost from all events in this trace
+        cid = d["id"]
+        # Compute total cost across all traces sharing this conversation_id
         cost_row = conn.execute(
             """SELECT COALESCE(SUM(
                    json_extract(e.attributes_json, '$."yuu.cost.amount"')
                ), 0) AS total_cost
                FROM events e
                JOIN spans s ON e.span_id = s.span_id
-               WHERE s.trace_id = ? AND e.name = 'yuu.cost'""",
-            (trace_id,),
+               WHERE s.conversation_id = ? AND e.name = 'yuu.cost'""",
+            (cid,),
         ).fetchone()
         d["total_cost"] = cost_row[0] if cost_row else 0.0
         conversations.append(d)
@@ -286,25 +284,15 @@ def list_conversations(
 def get_conversation(conn: sqlite3.Connection, conversation_id: str) -> dict[str, Any] | None:
     """Return all spans and events for a single conversation.
 
-    Finds the root span by conversation_id, then fetches ALL spans
-    sharing the same trace_id (including children like llm_gen, tool:*).
+    Fetches ALL spans carrying this conversation_id across all trace_ids.
+    This correctly handles multi-turn conversations where each continuation
+    produces a new OTEL trace but shares the same conversation_id attribute.
     """
-    # Find the root span to get the trace_id
-    root_row = conn.execute(
-        "SELECT trace_id FROM spans WHERE conversation_id = ? LIMIT 1",
-        (conversation_id,),
-    ).fetchone()
-    if root_row is None:
-        return None
-
-    trace_id = root_row["trace_id"]
-
-    # Fetch all spans in this trace
     rows = conn.execute(
         """SELECT * FROM spans
-           WHERE trace_id = ?
+           WHERE conversation_id = ?
            ORDER BY start_time_unix_nano""",
-        (trace_id,),
+        (conversation_id,),
     ).fetchall()
 
     if not rows:
@@ -313,22 +301,23 @@ def get_conversation(conn: sqlite3.Connection, conversation_id: str) -> dict[str
     spans = [_enrich_span(_row_to_dict(r)) for r in rows]
     _attach_events(conn, spans)
 
-    # Aggregate metadata from the root conversation span
-    root = spans[0]
-    agent = root.get("agent", "")
-    model = root.get("model")
-    tags = root["attributes"].get("yuu.conversation.tags")
+    # Aggregate metadata from the first span that has them
+    agent = next((s.get("agent") for s in spans if s.get("agent")), "")
+    model = next((s.get("model") for s in spans if s.get("model")), None)
+    tags = next(
+        (s["attributes"].get("yuu.conversation.tags") for s in spans if s["attributes"].get("yuu.conversation.tags")),
+        None,
+    )
 
-    # Total cost
-    span_ids = [s["span_id"] for s in spans]
-    placeholders = ",".join("?" * len(span_ids))
+    # Total cost across all traces sharing this conversation_id
     cost_row = conn.execute(
-        f"""SELECT COALESCE(SUM(
-               json_extract(attributes_json, '$."yuu.cost.amount"')
+        """SELECT COALESCE(SUM(
+               json_extract(e.attributes_json, '$."yuu.cost.amount"')
            ), 0)
-           FROM events
-           WHERE span_id IN ({placeholders}) AND name = 'yuu.cost'""",
-        span_ids,
+           FROM events e
+           JOIN spans s ON e.span_id = s.span_id
+           WHERE s.conversation_id = ? AND e.name = 'yuu.cost'""",
+        (conversation_id,),
     ).fetchone()
 
     return {

@@ -45,8 +45,8 @@ export function ConversationList({
   const filtered = conversations.filter((c) => {
     const q = search.toLowerCase();
     return (
-      c.agent.toLowerCase().includes(q) ||
-      c.id.toLowerCase().includes(q) ||
+      (c.agent ?? "").toLowerCase().includes(q) ||
+      (c.id ?? "").toLowerCase().includes(q) ||
       (c.model ?? "").toLowerCase().includes(q)
     );
   });
