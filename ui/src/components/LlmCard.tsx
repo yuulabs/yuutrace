@@ -92,9 +92,9 @@ export function LlmCard({ span, usage, cost }: LlmCardProps) {
                   {item.tool_calls?.map((tc: any, tcIdx: number) => (
                     <div key={tcIdx} style={styles.toolCall}>
                       <span style={styles.toolCallName}>{tc.function}</span>
-                      <span style={styles.toolCallArgs}>
-                        {JSON.stringify(tc.arguments)}
-                      </span>
+                      <pre style={styles.toolCallArgs}>
+                        {JSON.stringify(tc.arguments, null, 2)}
+                      </pre>
                     </div>
                   ))}
                 </div>
@@ -259,6 +259,8 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#8b949e",
     fontFamily: "monospace",
     wordBreak: "break-all",
+    whiteSpace: "pre-wrap",
+    margin: 0,
   },
   error: {
     marginTop: 6,

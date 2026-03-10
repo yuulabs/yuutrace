@@ -116,12 +116,12 @@ def insert_resource_spans(conn: sqlite3.Connection, resource_spans: list[dict[st
     count = 0
     for rs in resource_spans:
         resource_attrs = _parse_resource_attributes(rs.get("resource", {}))
-        resource_json = json.dumps(resource_attrs)
+        resource_json = json.dumps(resource_attrs, ensure_ascii=False)
 
         for ss in rs.get("scopeSpans", []):
             for span in ss.get("spans", []):
                 attrs = _parse_attributes(span.get("attributes", []))
-                attrs_json = json.dumps(attrs)
+                attrs_json = json.dumps(attrs, ensure_ascii=False)
 
                 # Denormalized fields from attributes
                 conversation_id = attrs.get("yuu.conversation.id")
@@ -170,7 +170,7 @@ def insert_resource_spans(conn: sqlite3.Connection, resource_spans: list[dict[st
                             span_id,
                             event.get("name", ""),
                             int(event.get("timeUnixNano", 0)),
-                            json.dumps(event_attrs),
+                            json.dumps(event_attrs, ensure_ascii=False),
                         ),
                     )
 

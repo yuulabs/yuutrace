@@ -132,7 +132,13 @@ function GenericCard({
           {systemTools && (
             <div style={styles.contextBlock}>
               <div style={styles.contextLabel}>Tools</div>
-              <pre style={styles.contextPre}>{systemTools}</pre>
+              <pre style={styles.contextPre}>{(() => {
+                try {
+                  return JSON.stringify(JSON.parse(systemTools), null, 2);
+                } catch {
+                  return systemTools;
+                }
+              })()}</pre>
             </div>
           )}
           {userContent && (
@@ -219,7 +225,9 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 8,
     borderRadius: 4,
     overflow: "auto",
-    maxHeight: 200,
+    maxHeight: 400,
     margin: 0,
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
   },
 };

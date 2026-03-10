@@ -318,7 +318,7 @@ class ConversationContext:
         """Record the system prompt and (optionally) tool specifications."""
         self._span.set_attribute(ATTR_CONTEXT_SYSTEM_PERSONA, persona)
         if tools is not None:
-            serialized = json.dumps(tools, default=str)
+            serialized = json.dumps(tools, default=str, ensure_ascii=False)
             self._span.set_attribute(ATTR_CONTEXT_SYSTEM_TOOLS, serialized)
 
     def user(self, content: str) -> None:
