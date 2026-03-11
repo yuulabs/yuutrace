@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 if TYPE_CHECKING:
-    from yuuagents.running_tools import OutputBuffer, RunningToolRegistry
+    from yuuagents.flow import OutputBuffer
 
 import msgspec
 from opentelemetry import context as otel_context
@@ -27,7 +27,6 @@ from .otel import (
     ATTR_AGENT,
     ATTR_CONTEXT_SYSTEM_PERSONA,
     ATTR_CONTEXT_SYSTEM_TOOLS,
-    ATTR_CONTEXT_USER_CONTENT,
     ATTR_CONVERSATION_ID,
     ATTR_CONVERSATION_MODEL,
     ATTR_CONVERSATION_TAGS,
@@ -164,7 +163,7 @@ class ToolsContext:
         calls: list[dict[str, Any]],
         *,
         soft_timeout: float | None = None,
-        registry: RunningToolRegistry | None = None,
+        on_pending: Callable[[str, asyncio.Task, OutputBuffer, str], str] | None = None,
         buffers: dict[str, OutputBuffer] | None = None,
     ) -> list[ToolResult]:
         """Execute tool calls concurrently, each in its own child span.
@@ -182,10 +181,11 @@ class ToolsContext:
               If omitted, inferred from ``tool.__self__._tool.spec.name``
               or ``tool.__name__``.
         soft_timeout:
-            If set, tools still running after this many seconds are registered
-            in *registry* and a "still running" placeholder result is returned.
-        registry:
-            RunningToolRegistry to register pending tools into.
+            If set, tools still running after this many seconds are handled
+            by *on_pending* and a "still running" placeholder result is returned.
+        on_pending:
+            ``(name, task, buffer, tool_call_id) -> handle_string``.
+            Called for each tool still running after *soft_timeout*.
         buffers:
             Mapping from tool_call_id to OutputBuffer for streaming capture.
 
@@ -255,12 +255,12 @@ class ToolsContext:
         # Build a mapping from asyncio.Task to call descriptor
         tasks = {asyncio.create_task(_run_one(c)): c for c in calls}
 
-        if soft_timeout is None or registry is None:
+        if soft_timeout is None or on_pending is None:
             # No soft timeout — gather as before
             done_results = await asyncio.gather(*tasks.keys())
             return list(done_results)
 
-        # Soft timeout path: wait up to soft_timeout, then register pending
+        # Soft timeout path: wait up to soft_timeout, then call on_pending
         done, pending = await asyncio.wait(
             tasks.keys(), timeout=soft_timeout
         )
@@ -271,16 +271,16 @@ class ToolsContext:
             call = tasks[t]
             results_by_id[call["tool_call_id"]] = t.result()
 
-        # Register pending tasks
+        # Handle pending tasks via callback
         for t in pending:
             call = tasks[t]
             tcid = call["tool_call_id"]
             name = _resolve_tool_name(call)
             buf = (buffers or {}).get(tcid)
             if buf is None:
-                from yuuagents.running_tools import OutputBuffer
+                from yuuagents.flow import OutputBuffer
                 buf = OutputBuffer()
-            handle = registry.register(name, t, buf, tcid)
+            handle = on_pending(name, t, buf, tcid)
             tail = buf.tail()
             tail_display = tail if tail.strip() else "<no output captured yet>"
             placeholder = (
@@ -322,8 +322,8 @@ class ConversationContext:
             self._span.set_attribute(ATTR_CONTEXT_SYSTEM_TOOLS, serialized)
 
     def user(self, content: str) -> None:
-        """Record a user message."""
-        self._span.set_attribute(ATTR_CONTEXT_USER_CONTENT, content)
+        """Record a user message as a span event (supports multiple calls)."""
+        self._span.add_event("user", {"content": content})
 
     # -- child contexts ----------------------------------------------------
 

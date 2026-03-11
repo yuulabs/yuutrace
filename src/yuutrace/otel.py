@@ -59,7 +59,6 @@ ATTR_TOOL_USAGE_QUANTITY = "yuu.tool.usage.quantity"
 # Context span attributes
 ATTR_CONTEXT_SYSTEM_PERSONA = "yuu.context.system.persona"
 ATTR_CONTEXT_SYSTEM_TOOLS = "yuu.context.system.tools"
-ATTR_CONTEXT_USER_CONTENT = "yuu.context.user.content"
 
 # LLM gen span attributes
 ATTR_LLM_GEN_ITEMS = "yuu.llm_gen.items"

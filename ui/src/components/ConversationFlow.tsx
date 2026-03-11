@@ -15,23 +15,51 @@ export interface ConversationFlowProps {
  * Waterfall-style conversation flow.
  *
  * Renders each span as an LlmCard or ToolCard depending on its name,
- * ordered by start time.
+ * ordered by start time. User messages (recorded as "user" events on
+ * conversation spans) are extracted and rendered as UserCard entries
+ * at their correct position in the timeline.
  *
  * For multi-turn conversations with continuations, multiple "conversation"
  * root spans exist (one per run). The system prompt is only shown on the
- * first one; subsequent spans only show the new user message to avoid
- * repetition.
+ * first one; subsequent spans omit it to avoid repetition.
  */
+type TimelineEntry =
+  | { kind: "span"; span: Span; time: number }
+  | { kind: "user"; content: string; time: number; key: string };
+
 export function ConversationFlow({ spans }: ConversationFlowProps) {
   // Filter out the "tools" wrapper span — it contains no I/O data;
   // individual "tool:*" child spans carry all the useful information.
-  const sorted = spans
-    .filter((s) => s.name !== "tools")
-    .sort((a, b) => a.start_time_unix_nano - b.start_time_unix_nano);
+  const filtered = spans.filter((s) => s.name !== "tools");
+
+  // Extract user events from conversation spans and interleave them in
+  // the timeline so they appear at the correct position between LLM steps.
+  const userEntries: TimelineEntry[] = filtered
+    .filter((s) => s.name === "conversation")
+    .flatMap((s) =>
+      s.events
+        .filter((ev) => ev.name === "user")
+        .map((ev, i) => ({
+          kind: "user" as const,
+          content: (ev.attributes["content"] as string) ?? "",
+          time: ev.time_unix_nano,
+          key: `${s.span_id}-user-${i}`,
+        })),
+    );
+
+  const spanEntries: TimelineEntry[] = filtered.map((s) => ({
+    kind: "span",
+    span: s,
+    time: s.start_time_unix_nano,
+  }));
+
+  const timeline = [...spanEntries, ...userEntries].sort(
+    (a, b) => a.time - b.time,
+  );
 
   // Find the earliest "conversation" span so we can suppress repeated system
   // prompts on continuation spans.
-  const firstConvNano = sorted
+  const firstConvNano = filtered
     .filter((s) => s.name === "conversation")
     .reduce(
       (min, s) => (s.start_time_unix_nano < min ? s.start_time_unix_nano : min),
@@ -40,7 +68,14 @@ export function ConversationFlow({ spans }: ConversationFlowProps) {
 
   return (
     <div style={styles.container}>
-      {sorted.map((span) => {
+      {timeline.map((entry) => {
+        if (entry.kind === "user") {
+          return (
+            <UserCard key={entry.key} content={entry.content} />
+          );
+        }
+
+        const { span } = entry;
         const costs = extractCostEvents(span);
         const isLlm = span.name === "llm_gen" || span.name.startsWith("llm");
         const isTool = span.name.startsWith("tool:");
@@ -103,16 +138,15 @@ function GenericCard({
   const durationMs =
     (span.end_time_unix_nano - span.start_time_unix_nano) / 1_000_000;
 
-  // Extract system and user context from conversation span
+  // Extract system context from conversation span (user messages shown as separate UserCard)
   const systemPersona = hideSystem
     ? undefined
     : (span.attributes["yuu.context.system.persona"] as string | undefined);
   const systemTools = hideSystem
     ? undefined
     : (span.attributes["yuu.context.system.tools"] as string | undefined);
-  const userContent = span.attributes["yuu.context.user.content"] as string | undefined;
 
-  const hasContext = systemPersona || systemTools || userContent;
+  const hasContext = systemPersona || systemTools;
 
   return (
     <div style={styles.card}>
@@ -141,18 +175,21 @@ function GenericCard({
               })()}</pre>
             </div>
           )}
-          {userContent && (
-            <div style={styles.contextBlock}>
-              <div style={styles.contextLabel}>User</div>
-              <div style={styles.contextContent}>{userContent}</div>
-            </div>
-          )}
         </div>
       )}
 
       {totalCost > 0 && (
         <div style={styles.costLine}>Total: ${totalCost.toFixed(4)}</div>
       )}
+    </div>
+  );
+}
+
+function UserCard({ content }: { content: string }) {
+  return (
+    <div style={styles.userCard}>
+      <div style={styles.userLabel}>User</div>
+      <div style={styles.userContent}>{content}</div>
     </div>
   );
 }
@@ -169,6 +206,26 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid #2d333b",
     borderRadius: 8,
     padding: "12px 16px",
+  },
+  userCard: {
+    background: "#0d1117",
+    border: "1px solid #1f6feb",
+    borderRadius: 8,
+    padding: "12px 16px",
+  },
+  userLabel: {
+    fontSize: 11,
+    fontWeight: 600,
+    color: "#58a6ff",
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.05em",
+    marginBottom: 6,
+  },
+  userContent: {
+    fontSize: 13,
+    color: "#c9d1d9",
+    whiteSpace: "pre-wrap" as const,
+    wordBreak: "break-word" as const,
   },
   cardHeader: {
     display: "flex",
