@@ -24,6 +24,7 @@ Recording (recommended wrappers)::
 Initialization::
 
     init(*, endpoint="http://localhost:4318/v1/traces", service_name="yuutrace", ...)
+    init_memory() -> MemoryTraceStore
 
 Low-level::
 
@@ -46,7 +47,7 @@ from .types import (
 from .context import (
     ConversationContext,
     LlmGenContext,
-    ToolResult,
+    ToolSpan,
     ToolsContext,
     conversation,
 )
@@ -56,7 +57,8 @@ from .cost import record_cost, record_cost_delta
 from .usage import record_llm_usage, record_tool_usage
 
 # -- Initialization --------------------------------------------------------
-from .init import TracingNotInitializedError, init
+from .init import TracingNotInitializedError, init, init_memory
+from .memory import MemoryTraceStore
 
 # -- Low-level -------------------------------------------------------------
 from .span import NoActiveSpanError, add_event, current_span
@@ -73,7 +75,7 @@ __all__ = [
     "ConversationContext",
     "LlmGenContext",
     "ToolsContext",
-    "ToolResult",
+    "ToolSpan",
     # Recording
     "record_cost",
     "record_cost_delta",
@@ -81,7 +83,9 @@ __all__ = [
     "record_tool_usage",
     # Initialization
     "init",
+    "init_memory",
     "TracingNotInitializedError",
+    "MemoryTraceStore",
     # Low-level
     "current_span",
     "add_event",

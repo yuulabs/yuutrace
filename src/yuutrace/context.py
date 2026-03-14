@@ -3,23 +3,20 @@
 Provides ``conversation()``, ``ConversationContext.llm_gen()``, and
 ``ConversationContext.tools()`` -- the recommended entry points for
 instrumenting LLM agent workloads.
+
+This module is a *pure span factory* — it creates and annotates OTEL spans
+but does NOT execute tools. Callers own the execution model.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
-import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from uuid import UUID
 
-if TYPE_CHECKING:
-    from yuuagents.flow import OutputBuffer
-
 import msgspec
-from opentelemetry import context as otel_context
 from opentelemetry import trace
 
 from .init import require_initialized
@@ -38,16 +35,27 @@ _tracer = trace.get_tracer("yuutrace")
 
 
 # ---------------------------------------------------------------------------
-# ToolResult
+# ToolSpan
 # ---------------------------------------------------------------------------
 
 
-class ToolResult(msgspec.Struct, frozen=True):
-    """Result of a single tool invocation inside a ``tools()`` block."""
+class ToolSpan:
+    """Write output/error to a tool span. Call end() when done."""
 
-    tool_call_id: str
-    output: Any
-    error: str | None = None
+    __slots__ = ("_span",)
+
+    def __init__(self, span: trace.Span) -> None:
+        self._span = span
+
+    def ok(self, output: Any) -> None:
+        self._span.set_attribute("yuu.tool.output", json.dumps(output, default=str))
+
+    def fail(self, error: str) -> None:
+        self._span.set_attribute("yuu.tool.error", error)
+        set_span_error(self._span, RuntimeError(error))
+
+    def end(self) -> None:
+        self._span.end()
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +64,8 @@ class ToolResult(msgspec.Struct, frozen=True):
 
 
 class LlmGenContext:
-    """Context returned by ``ConversationContext.llm_gen()``.
+    """Context returned by ``ConversationContext.llm_gen()`` /
+    ``ConversationContext.start_llm_gen()``.
 
     Allows logging the raw LLM response items on the current ``llm_gen`` span.
     """
@@ -67,45 +76,11 @@ class LlmGenContext:
         self._span = span
 
     def log(self, items: list[Any]) -> None:
-        """Attach LLM response items to this span for later inspection in the UI.
+        """Attach LLM response items to this span for later inspection.
 
-        The web UI recognises two item shapes:
-
-        ``{"type": "text", "text": str}``
-            A text response from the LLM.
-
-        ``{"type": "tool_calls", "tool_calls": [{"function": str, "arguments": Any}, ...]}``
-            Tool-call decisions made by the LLM.
-
-        Items with other ``type`` values are stored but **not rendered** by
-        the default UI.
-
-        Each element is auto-serialized to JSON before storage.  The
-        serializer handles ``dict``, ``msgspec.Struct``
-        (via ``msgspec.to_builtins()``), Pydantic ``BaseModel``
-        (via ``.model_dump()``), dataclasses (via ``vars()``, private attrs
-        stripped), and falls back to ``str()`` for anything else.
-
-        Call ``log()`` **once** per ``llm_gen()`` block -- subsequent calls
-        overwrite the previous value (it sets a span attribute, not an event).
-
-        Example::
-
-            with chat.llm_gen() as gen:
-                response = await client.chat(messages)
-                gen.log([
-                    {"type": "text", "text": "I'll check the weather."},
-                    {"type": "tool_calls", "tool_calls": [
-                        {"function": "get_weather", "arguments": {"city": "Tokyo"}},
-                    ]},
-                ])
-
-        Parameters
-        ----------
-        items:
-            A list of response items.  Each item can be any JSON-serializable
-            object, a ``msgspec.Struct``, a Pydantic model, a dataclass, or
-            any object with a ``__dict__``.
+        Each element is auto-serialized to JSON. Handles ``dict``,
+        ``msgspec.Struct``, Pydantic ``BaseModel``, dataclasses, and
+        falls back to ``str()``.
         """
         def _jsonable(x: Any) -> Any:
             if x is None or isinstance(x, str | int | float | bool):
@@ -138,6 +113,12 @@ class LlmGenContext:
         serialized = json.dumps([_jsonable(i) for i in items], ensure_ascii=False)
         self._span.set_attribute(ATTR_LLM_GEN_ITEMS, serialized)
 
+    def end(self, error: Exception | None = None) -> None:
+        """End the llm_gen span. Optionally record an error."""
+        if error is not None:
+            set_span_error(self._span, error)
+        self._span.end()
+
 
 # ---------------------------------------------------------------------------
 # ToolsContext
@@ -145,11 +126,7 @@ class LlmGenContext:
 
 
 class ToolsContext:
-    """Context returned by ``ConversationContext.tools()``.
-
-    Provides ``gather()`` for concurrent tool execution with per-call
-    child spans.
-    """
+    """Opens child spans for individual tool calls. Does NOT execute tools."""
 
     __slots__ = ("_parent_span", "_tracer", "_conversation_id")
 
@@ -158,140 +135,34 @@ class ToolsContext:
         self._tracer = tracer
         self._conversation_id = conversation_id
 
-    async def gather(
-        self,
-        calls: list[dict[str, Any]],
-        *,
-        soft_timeout: float | None = None,
-        on_pending: Callable[[str, asyncio.Task, OutputBuffer, str], str] | None = None,
-        buffers: dict[str, OutputBuffer] | None = None,
-    ) -> list[ToolResult]:
-        """Execute tool calls concurrently, each in its own child span.
+    def start_tool(self, *, name: str, call_id: str, input: dict[str, Any]) -> ToolSpan:
+        """Open a child span for one tool call. Caller must call span.end()."""
+        input_str = json.dumps(input, default=str, ensure_ascii=False)
+        attrs: dict[str, str] = {
+            "yuu.tool.name": name,
+            "yuu.tool.call_id": call_id,
+            "yuu.tool.input": input_str,
+        }
+        if self._conversation_id:
+            attrs[ATTR_CONVERSATION_ID] = self._conversation_id
+        span = self._tracer.start_span(f"tool:{name}", attributes=attrs)
+        return ToolSpan(span)
 
-        Parameters
-        ----------
-        calls:
-            A list of call descriptors.  Each dict has the following keys:
+    @contextmanager
+    def tool(self, *, name: str, call_id: str, input: dict[str, Any]) -> Iterator[ToolSpan]:
+        """Context manager sugar over start_tool/end."""
+        ts = self.start_tool(name=name, call_id=call_id, input=input)
+        try:
+            yield ts
+        except Exception as exc:
+            ts.fail(f"{type(exc).__name__}: {exc}")
+            raise
+        finally:
+            ts.end()
 
-            - ``tool_call_id`` (``str``, required) -- unique ID for this call.
-            - ``tool`` (``Callable``, required) -- sync or async callable to invoke.
-            - ``params`` (``dict[str, Any]``, optional) -- keyword arguments
-              forwarded to *tool* via ``tool(**params)``.
-            - ``name`` (``str``, optional) -- display name for the span.
-              If omitted, inferred from ``tool.__self__._tool.spec.name``
-              or ``tool.__name__``.
-        soft_timeout:
-            If set, tools still running after this many seconds are handled
-            by *on_pending* and a "still running" placeholder result is returned.
-        on_pending:
-            ``(name, task, buffer, tool_call_id) -> handle_string``.
-            Called for each tool still running after *soft_timeout*.
-        buffers:
-            Mapping from tool_call_id to OutputBuffer for streaming capture.
-
-        Returns
-        -------
-        list[ToolResult]
-            One ``ToolResult`` per call, in the same order as *calls*.
-            If a tool raises, the corresponding result has ``error`` set
-            and ``output`` is ``None``.
-        """
-
-        def _resolve_tool_name(call: dict[str, Any]) -> str:
-            tool_fn: Callable[..., Any] = call["tool"]
-            tool_name = str(call.get("name") or "")
-            if not tool_name:
-                bound_self = getattr(tool_fn, "__self__", None)
-                tool_obj = getattr(bound_self, "_tool", None)
-                spec = getattr(tool_obj, "spec", None)
-                spec_name = getattr(spec, "name", None)
-                if isinstance(spec_name, str) and spec_name:
-                    tool_name = spec_name
-            if not tool_name:
-                tool_name = getattr(tool_fn, "__name__", str(tool_fn))
-            return tool_name
-
-        async def _run_one(call: dict[str, Any]) -> ToolResult:
-            tool_call_id: str = call["tool_call_id"]
-            tool_fn: Callable[..., Any] = call["tool"]
-            params: dict[str, Any] = call.get("params", {})
-            tool_name = _resolve_tool_name(call)
-
-            # Serialize input parameters
-            input_str = json.dumps(params, default=str, ensure_ascii=False)
-
-            # Create a child span linked to the tools span context
-            tool_attrs: dict[str, str] = {
-                "yuu.tool.name": tool_name,
-                "yuu.tool.call_id": tool_call_id,
-                "yuu.tool.input": input_str,
-            }
-            if self._conversation_id:
-                tool_attrs[ATTR_CONVERSATION_ID] = self._conversation_id
-            with self._tracer.start_as_current_span(
-                f"tool:{tool_name}",
-                attributes=tool_attrs,
-            ) as tool_span:
-                try:
-                    result = tool_fn(**params)
-                    if asyncio.iscoroutine(result) or asyncio.isfuture(result):
-                        result = await result
-
-                    # Serialize output
-                    output_str = json.dumps(result, default=str, ensure_ascii=False)
-                    tool_span.set_attribute("yuu.tool.output", output_str)
-
-                    return ToolResult(tool_call_id=tool_call_id, output=result)
-                except Exception as exc:
-                    set_span_error(tool_span, exc)
-                    error_msg = f"{type(exc).__name__}: {exc}"
-                    tool_span.set_attribute("yuu.tool.error", error_msg)
-                    return ToolResult(
-                        tool_call_id=tool_call_id,
-                        output=None,
-                        error=error_msg,
-                    )
-
-        # Build a mapping from asyncio.Task to call descriptor
-        tasks = {asyncio.create_task(_run_one(c)): c for c in calls}
-
-        if soft_timeout is None or on_pending is None:
-            # No soft timeout — gather as before
-            done_results = await asyncio.gather(*tasks.keys())
-            return list(done_results)
-
-        # Soft timeout path: wait up to soft_timeout, then call on_pending
-        done, pending = await asyncio.wait(
-            tasks.keys(), timeout=soft_timeout
-        )
-
-        # Collect results for completed tasks, preserving input order
-        results_by_id: dict[str, ToolResult] = {}
-        for t in done:
-            call = tasks[t]
-            results_by_id[call["tool_call_id"]] = t.result()
-
-        # Handle pending tasks via callback
-        for t in pending:
-            call = tasks[t]
-            tcid = call["tool_call_id"]
-            name = _resolve_tool_name(call)
-            buf = (buffers or {}).get(tcid)
-            if buf is None:
-                from yuuagents.flow import OutputBuffer
-                buf = OutputBuffer()
-            handle = on_pending(name, t, buf, tcid)
-            tail = buf.tail()
-            tail_display = tail if tail.strip() else "<no output captured yet>"
-            placeholder = (
-                f"\u23f3 tool is still running (soft-timeout={soft_timeout:.0f}s reached). handle={handle}\n"
-                f"name: {name or '?'}\n"
-                f"tool_call_id: {tcid}\n"
-                f"Tail output:\n{tail_display}"
-            )
-            results_by_id[tcid] = ToolResult(tool_call_id=tcid, output=placeholder)
-
-        return [results_by_id[c["tool_call_id"]] for c in calls]
+    def end(self) -> None:
+        """End the tools span."""
+        self._parent_span.end()
 
 
 # ---------------------------------------------------------------------------
@@ -332,16 +203,11 @@ class ConversationContext:
         """Return the conversation ID from the root span, if set."""
         return self._span.attributes.get(ATTR_CONVERSATION_ID)  # type: ignore[union-attr]
 
+    # -- LLM gen (context manager) -----------------------------------------
+
     @contextmanager
     def llm_gen(self) -> Iterator[LlmGenContext]:
-        """Open a child span for an LLM generation step.
-
-        Usage::
-
-            with chat.llm_gen() as gen:
-                ...
-                gen.log(items)
-        """
+        """Open a child span for an LLM generation step (auto end)."""
         attrs: dict[str, str] = {}
         cid = self.conversation_id
         if cid:
@@ -354,15 +220,20 @@ class ConversationContext:
                 set_span_error(span, exc)
                 raise
 
+    def start_llm_gen(self) -> LlmGenContext:
+        """Open a child span for an LLM generation step (manual end)."""
+        attrs: dict[str, str] = {}
+        cid = self.conversation_id
+        if cid:
+            attrs[ATTR_CONVERSATION_ID] = cid
+        span = self._tracer.start_span("llm_gen", attributes=attrs)
+        return LlmGenContext(span)
+
+    # -- Tools (context manager) -------------------------------------------
+
     @contextmanager
     def tools(self) -> Iterator[ToolsContext]:
-        """Open a child span for a batch of tool calls.
-
-        Usage::
-
-            with chat.tools() as t:
-                results = await t.gather([...])
-        """
+        """Open a child span for a batch of tool calls (auto end)."""
         attrs: dict[str, str] = {}
         cid = self.conversation_id
         if cid:
@@ -374,6 +245,15 @@ class ConversationContext:
             except Exception as exc:
                 set_span_error(span, exc)
                 raise
+
+    def start_tools(self) -> ToolsContext:
+        """Open a child span for a batch of tool calls (manual end)."""
+        attrs: dict[str, str] = {}
+        cid = self.conversation_id
+        if cid:
+            attrs[ATTR_CONVERSATION_ID] = cid
+        span = self._tracer.start_span("tools", attributes=attrs)
+        return ToolsContext(span, self._tracer, cid)
 
 
 # ---------------------------------------------------------------------------
@@ -407,14 +287,6 @@ def conversation(
     ConversationContext
         An object with helpers to record system prompts, user messages,
         LLM generations, and tool calls as child spans.
-
-    Example::
-
-        with ytrace.conversation(id=uuid4(), agent="my-agent", model="gpt-4o") as chat:
-            chat.system(persona="You are helpful.", tools=tool_specs)
-            chat.user("What is Bitcoin price?")
-            with chat.llm_gen() as gen:
-                ...
     """
     attrs: dict[str, str | list[str]] = {
         ATTR_CONVERSATION_ID: str(id),
@@ -422,7 +294,6 @@ def conversation(
         ATTR_CONVERSATION_MODEL: model,
     }
     if tags is not None:
-        # Flatten dict tags to a list of "key=value" strings for OTEL
         attrs[ATTR_CONVERSATION_TAGS] = [f"{k}={v}" for k, v in tags.items()]
 
     require_initialized()

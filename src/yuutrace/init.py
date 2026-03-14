@@ -6,6 +6,7 @@ from typing import Any
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
 
@@ -108,3 +109,41 @@ def require_initialized() -> None:
 
 def _is_proxy_tracer_provider(provider: object) -> bool:
     return provider.__class__.__name__ == "ProxyTracerProvider"
+
+
+def init_memory() -> "MemoryTraceStore":
+    """Initialize tracing with an in-memory SQLite backend.
+
+    Returns a MemoryTraceStore that can be queried for spans/conversations.
+    Useful for testing: assert on recorded traces without external collector.
+
+    This forcibly replaces any existing TracerProvider.
+    """
+    import sqlite3
+
+    from .cli.db import _SCHEMA
+    from .memory import MemoryTraceStore, _MemoryExporter
+
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(_SCHEMA)
+    conn.execute("PRAGMA foreign_keys=ON")
+
+    # Shutdown existing provider if any
+    existing = trace.get_tracer_provider()
+    if hasattr(existing, "shutdown"):
+        try:
+            existing.shutdown()
+        except Exception:
+            pass
+
+    provider = TracerProvider(resource=Resource.create({"service.name": "yuutrace-test"}))
+    exporter = _MemoryExporter(conn)
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    # Force-set even if already configured
+    trace._TRACER_PROVIDER = None  # type: ignore[attr-defined]
+    trace._TRACER_PROVIDER_SET_ONCE._done = False  # type: ignore[attr-defined]
+    trace.set_tracer_provider(provider)
+
+    return MemoryTraceStore(conn)
