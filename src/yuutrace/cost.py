@@ -28,6 +28,30 @@ def record_cost_delta(cost: CostDelta) -> None:
     add_event(EVENT_COST, cost_delta_to_otel(cost))
 
 
+def record_llm_cost(usage: object, cost: object) -> None:
+    """Record LLM usage + cost in one call.
+
+    Accepts duck-typed objects (e.g. ``yuullm.Usage`` and ``yuullm.Cost``).
+    ``cost`` must have ``total_cost`` and ``source`` attributes.
+    ``usage`` must have ``provider``, ``model``, and optionally ``request_id``.
+    """
+    from .usage import _to_llm_usage_delta, record_llm_usage
+
+    delta = _to_llm_usage_delta(usage)
+    record_llm_usage(delta)
+    record_cost_delta(
+        CostDelta(
+            category=CostCategory.llm,
+            currency=Currency.USD,
+            amount=cost.total_cost,  # type: ignore[attr-defined]
+            source=getattr(cost, "source", None),
+            llm_provider=delta.provider,
+            llm_model=delta.model,
+            llm_request_id=delta.request_id,
+        )
+    )
+
+
 def record_cost(
     *,
     category: CostCategory | str,

@@ -53,11 +53,11 @@ from .context import (
 )
 
 # -- Recording wrappers ----------------------------------------------------
-from .cost import record_cost, record_cost_delta
+from .cost import record_cost, record_cost_delta, record_llm_cost
 from .usage import record_llm_usage, record_tool_usage
 
 # -- Initialization --------------------------------------------------------
-from .init import TracingNotInitializedError, init, init_memory
+from .init import TracingNotInitializedError, init, init_memory, is_initialized
 from .memory import MemoryTraceStore
 
 # -- Low-level -------------------------------------------------------------
@@ -79,11 +79,13 @@ __all__ = [
     # Recording
     "record_cost",
     "record_cost_delta",
+    "record_llm_cost",
     "record_llm_usage",
     "record_tool_usage",
     # Initialization
     "init",
     "init_memory",
+    "is_initialized",
     "TracingNotInitializedError",
     "MemoryTraceStore",
     # Low-level

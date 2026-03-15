@@ -40,6 +40,7 @@ export interface Span {
 
 /** A single OTEL span event. */
 export interface SpanEvent {
+  id: number;
   name: string;
   time_unix_nano: number;
   attributes: Record<string, unknown>;

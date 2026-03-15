@@ -42,6 +42,23 @@ def record_llm_usage(
 ) -> None: ...
 
 
+def _to_llm_usage_delta(obj: object) -> LlmUsageDelta:
+    """Convert any object with matching attributes to LlmUsageDelta.
+
+    Works with yuullm.Usage or any duck-typed equivalent.
+    """
+    return LlmUsageDelta(
+        provider=obj.provider,  # type: ignore[attr-defined]
+        model=obj.model,  # type: ignore[attr-defined]
+        request_id=getattr(obj, "request_id", None),
+        input_tokens=getattr(obj, "input_tokens", 0),
+        output_tokens=getattr(obj, "output_tokens", 0),
+        cache_read_tokens=getattr(obj, "cache_read_tokens", 0),
+        cache_write_tokens=getattr(obj, "cache_write_tokens", 0),
+        total_tokens=getattr(obj, "total_tokens", None),
+    )
+
+
 def record_llm_usage(
     usage: LlmUsageDelta | None = None,
     *,
@@ -56,8 +73,8 @@ def record_llm_usage(
 ) -> None:
     """Record an incremental LLM token usage event on the current span.
 
-    Accepts either a pre-built ``LlmUsageDelta`` **or** keyword arguments
-    that will be used to construct one.
+    Accepts a ``LlmUsageDelta``, any duck-typed object with ``provider``
+    and ``model`` attributes (e.g. ``yuullm.Usage``), or keyword arguments.
 
     Raises
     ------
@@ -67,12 +84,10 @@ def record_llm_usage(
         If neither a struct instance nor the required keyword arguments
         (``provider``, ``model``) are supplied.
     """
-    if usage is None:
-        if provider is None or model is None:
-            raise TypeError(
-                "record_llm_usage() requires either a LlmUsageDelta instance "
-                "or 'provider' and 'model' keyword arguments."
-            )
+    if usage is not None:
+        if not isinstance(usage, LlmUsageDelta):
+            usage = _to_llm_usage_delta(usage)
+    elif provider is not None and model is not None:
         usage = LlmUsageDelta(
             provider=provider,
             model=model,
@@ -82,6 +97,11 @@ def record_llm_usage(
             cache_read_tokens=cache_read_tokens,
             cache_write_tokens=cache_write_tokens,
             total_tokens=total_tokens,
+        )
+    else:
+        raise TypeError(
+            "record_llm_usage() requires either a LlmUsageDelta instance, "
+            "a duck-typed usage object, or 'provider' and 'model' keyword arguments."
         )
     add_event(EVENT_LLM_USAGE, llm_usage_to_otel(usage))
 
