@@ -196,6 +196,18 @@ class ConversationContext:
         """Record a user message as a span event (supports multiple calls)."""
         self._span.add_event("user", {"content": content})
 
+    # -- lifecycle ---------------------------------------------------------
+
+    def end(self, error: Exception | None = None) -> None:
+        """End the conversation span.
+
+        Use this when the span was opened via ``start_conversation()``
+        (manual lifecycle) rather than the ``conversation()`` context manager.
+        """
+        if error is not None:
+            set_span_error(self._span, error)
+        self._span.end()
+
     # -- child contexts ----------------------------------------------------
 
     @property
@@ -308,3 +320,52 @@ def conversation(
         except Exception as exc:
             set_span_error(span, exc)
             raise
+
+
+def start_conversation(
+    *,
+    id: UUID,
+    agent: str,
+    model: str,
+    tags: dict[str, str] | None = None,
+) -> ConversationContext:
+    """Open a root conversation span without attaching to the current context.
+
+    Unlike ``conversation()`` (a context manager that uses
+    ``start_as_current_span``), this function uses ``start_span`` which does
+    NOT attach/detach a ``ContextVar`` token.  This makes it safe to use
+    across async generator boundaries where the entry and exit may run in
+    different ``contextvars.Context`` objects.
+
+    The caller is responsible for calling ``end()`` on the returned context
+    when the conversation is done.
+
+    Parameters
+    ----------
+    id:
+        Unique conversation identifier.
+    agent:
+        Name of the agent that owns this conversation.
+    model:
+        Primary LLM model used in this conversation.
+    tags:
+        Optional key-value tags for filtering/grouping.
+
+    Returns
+    -------
+    ConversationContext
+        An object with helpers to record system prompts, user messages,
+        LLM generations, and tool calls as child spans.
+    """
+    attrs: dict[str, str | list[str]] = {
+        ATTR_CONVERSATION_ID: str(id),
+        ATTR_AGENT: agent,
+        ATTR_CONVERSATION_MODEL: model,
+    }
+    if tags is not None:
+        attrs[ATTR_CONVERSATION_TAGS] = [f"{k}={v}" for k, v in tags.items()]
+
+    require_initialized()
+    tracer = trace.get_tracer("yuutrace")
+    span = tracer.start_span("conversation", attributes=attrs)  # type: ignore[arg-type]
+    return ConversationContext(span, tracer)

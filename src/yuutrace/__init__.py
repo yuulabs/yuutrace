@@ -50,6 +50,7 @@ from .context import (
     ToolSpan,
     ToolsContext,
     conversation,
+    start_conversation,
 )
 
 # -- Recording wrappers ----------------------------------------------------
@@ -72,6 +73,7 @@ __all__ = [
     "ToolUsageDelta",
     # Context managers
     "conversation",
+    "start_conversation",
     "ConversationContext",
     "LlmGenContext",
     "ToolsContext",
